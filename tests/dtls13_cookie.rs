@@ -13,7 +13,7 @@ mod wolfssl_helper;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{Dtls, DtlsCertificate};
+use dimpl13::{Dtls, DtlsCertificate};
 
 use crate::common::{drain_outputs, dtls13_config};
 use crate::ossl_helper::{DtlsCertOptions, OsslDtlsCert};

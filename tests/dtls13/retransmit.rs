@@ -3,14 +3,14 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls};
+use dimpl13::{Config, Dtls};
 
 use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_client_retransmits_on_timeout() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -57,7 +57,7 @@ fn dtls13_client_retransmits_on_timeout() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_completes_after_packet_loss() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -127,7 +127,7 @@ fn dtls13_handshake_completes_after_packet_loss() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_completes_with_early_packet_loss() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -217,7 +217,7 @@ fn dtls13_handshake_completes_with_early_packet_loss() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handles_bidirectional_packet_loss() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -310,7 +310,7 @@ fn dtls13_handles_bidirectional_packet_loss() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_survives_random_packet_loss_pattern() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -394,7 +394,7 @@ fn dtls13_survives_random_packet_loss_pattern() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_selective_retransmit_only_missing_records() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -618,7 +618,7 @@ fn dtls13_selective_retransmit_only_missing_records() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_retransmit_exponential_backoff() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -706,7 +706,7 @@ fn dtls13_retransmit_exponential_backoff() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_ack_loss_falls_back_to_timer() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -789,7 +789,7 @@ fn dtls13_ack_loss_falls_back_to_timer() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_retransmit_during_hrr_flow() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -874,7 +874,7 @@ fn dtls13_retransmit_during_hrr_flow() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_timeout_aborts() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 

@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, Output, SrtpProfile};
+use dimpl13::{Config, Dtls, Output, SrtpProfile};
 
 /// Collected outputs from polling an endpoint to `Timeout`.
 #[derive(Default, Debug)]
@@ -129,7 +129,7 @@ pub fn dtls13_config_with_mtu(mtu: usize) -> Arc<Config> {
 /// Returns `(client, server, now)` with the handshake already completed.
 #[cfg(feature = "rcgen")]
 pub fn setup_connected_13_pair(now: Instant) -> (Dtls, Dtls, Instant) {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");

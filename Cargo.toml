@@ -1,13 +1,13 @@
 [package]
-name = "dimpl"
+name = "dimpl13"
 authors = ["Martin Algesten <martin@algesten.se>"]
-description = "DTLS 1.2/1.3 implementation (Sans‑IO, Sync)"
+description = "DTLS 1.3 implementation (Sans‑IO, Sync)"
 version = "0.8.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/algesten/dimpl"
+repository = "https://github.com/SemyonTs/dimpl"
 readme = "README.md"
-keywords = ["dtls", "tls", "webrtc", "psk"]
+keywords = ["dtls", "tls", "webrtc"]
 categories = ["network-programming", "cryptography", "security"]
 
 # MSRV

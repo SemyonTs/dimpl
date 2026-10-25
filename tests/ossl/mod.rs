@@ -33,7 +33,7 @@ pub mod io_buf;
 mod stream;
 
 mod dtls;
-use dimpl::SrtpProfile;
+use dimpl13::SrtpProfile;
 pub use dtls::{OsslDtlsImpl, dtls_ssl_create};
 
 pub use io_buf::DatagramSend;

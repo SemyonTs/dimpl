@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, Output, SrtpProfile};
+use dimpl13::{Config, Dtls, Output, SrtpProfile};
 
 /// Collected outputs from polling an endpoint to `Timeout`.
 #[derive(Default, Debug)]

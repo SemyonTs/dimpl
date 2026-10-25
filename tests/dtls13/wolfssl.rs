@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, Output, SrtpProfile};
+use dimpl13::{Config, Dtls, Output, SrtpProfile};
 
 use crate::wolfssl_helper::{DtlsEvent, WolfDtlsCert};
 
@@ -79,7 +79,7 @@ fn dtls13_config_with_mtu(mtu: usize) -> Arc<Config> {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_handshake() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -149,7 +149,7 @@ fn dtls13_wolfssl_client_handshake() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_data_exchange() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -228,7 +228,7 @@ fn dtls13_wolfssl_client_data_exchange() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_bidirectional_data() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -325,7 +325,7 @@ fn dtls13_wolfssl_client_bidirectional_data() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_multiple_messages() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -408,7 +408,7 @@ fn dtls13_wolfssl_client_multiple_messages() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_many_small_messages() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -489,7 +489,7 @@ fn dtls13_wolfssl_client_many_small_messages() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_retransmit_on_timeout() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -573,7 +573,7 @@ fn dtls13_wolfssl_client_retransmit_on_timeout() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_handshake_after_packet_loss() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -656,7 +656,7 @@ fn dtls13_wolfssl_client_handshake_after_packet_loss() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_handles_duplicates() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -727,7 +727,7 @@ fn dtls13_wolfssl_client_handles_duplicates() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_handles_out_of_order() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -813,7 +813,7 @@ fn dtls13_wolfssl_client_handles_out_of_order() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_small_mtu() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -897,7 +897,7 @@ fn dtls13_wolfssl_client_small_mtu() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_large_data_fragmented() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -986,7 +986,7 @@ fn dtls13_wolfssl_client_large_data_fragmented() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_recovers_from_corruption() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1062,7 +1062,7 @@ fn dtls13_wolfssl_client_recovers_from_corruption() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_client_handshake_with_early_packet_loss() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1157,7 +1157,7 @@ fn dtls13_wolfssl_client_handshake_with_early_packet_loss() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_server_handshake() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1226,7 +1226,7 @@ fn dtls13_wolfssl_server_handshake() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_server_data_exchange() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1300,7 +1300,7 @@ fn dtls13_wolfssl_server_data_exchange() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_server_bidirectional_data() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1426,7 +1426,7 @@ fn dtls13_wolfssl_server_bidirectional_data() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_server_multiple_messages() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1505,7 +1505,7 @@ fn dtls13_wolfssl_server_multiple_messages() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_server_handshake_after_packet_loss() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1590,7 +1590,7 @@ fn dtls13_wolfssl_server_handshake_after_packet_loss() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_server_handshake_with_early_packet_loss() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1683,7 +1683,7 @@ fn dtls13_wolfssl_server_handshake_with_early_packet_loss() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_server_handles_duplicates() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1786,7 +1786,7 @@ fn dtls13_wolfssl_server_large_data_fragmented() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_server_many_small_messages() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1864,7 +1864,7 @@ fn dtls13_wolfssl_server_many_small_messages() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_server_bidirectional_data() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1989,7 +1989,7 @@ fn dtls13_wolfssl_client_hrr_flow() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_server_small_mtu() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -2072,7 +2072,7 @@ fn dtls13_wolfssl_server_small_mtu() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_server_recovers_from_corruption() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -2156,7 +2156,7 @@ fn dtls13_wolfssl_server_recovers_from_corruption() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_wolfssl_server_handles_out_of_order() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 

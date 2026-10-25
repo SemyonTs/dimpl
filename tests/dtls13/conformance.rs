@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "rcgen")]
-use dimpl::certificate::generate_self_signed_certificate;
-use dimpl::{Config, Dtls};
+use dimpl13::certificate::generate_self_signed_certificate;
+use dimpl13::{Config, Dtls};
 
 use crate::common::*;
 

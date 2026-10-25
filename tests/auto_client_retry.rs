@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{Config, Dtls, DtlsCertificate, Output, certificate};
+use dimpl13::{Config, Dtls, DtlsCertificate, Output, certificate};
 
 const COOKIE: [u8; 20] = [0xC0; 20];
 const HRR_RANDOM: [u8; 32] = [

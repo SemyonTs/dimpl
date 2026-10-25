@@ -3,14 +3,14 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{CertificateError, Config, Dtls, DtlsCertificate, Error, SrtpProfile};
+use dimpl13::{CertificateError, Config, Dtls, DtlsCertificate, Error, SrtpProfile};
 
 use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_empty_client_certificate_is_rejected_when_required() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let now = Instant::now();
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -42,7 +42,7 @@ fn dtls13_empty_client_certificate_is_rejected_when_required() {
                     assert!(
                         matches!(
                             alert_result,
-                            Err(Error::SecurityError(dimpl::SecurityError::FatalAlert {
+                            Err(Error::SecurityError(dimpl13::SecurityError::FatalAlert {
                                 description: 116
                             }))
                         ),
@@ -64,7 +64,7 @@ fn dtls13_empty_client_certificate_is_rejected_when_required() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_client_certificate_not_required() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let now = Instant::now();
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -84,7 +84,7 @@ fn dtls13_client_certificate_not_required() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_basic_handshake() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -136,7 +136,7 @@ fn dtls13_basic_handshake() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_with_keying_material() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -204,7 +204,7 @@ fn dtls13_handshake_with_keying_material() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_peer_certificate_exchange() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -277,7 +277,7 @@ fn dtls13_peer_certificate_exchange() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_srtp_keying_material_correct_size() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -340,7 +340,7 @@ fn dtls13_srtp_keying_material_correct_size() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_hello_retry_request_flow() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -408,10 +408,10 @@ fn dtls13_hello_retry_request_flow() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_aes_256_gcm() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
-    use dimpl::crypto::Dtls13CipherSuite;
-    use dimpl::crypto::aws_lc_rs;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
+    use dimpl13::crypto::Dtls13CipherSuite;
+    use dimpl13::crypto::aws_lc_rs;
 
     let _ = env_logger::try_init();
 
@@ -431,7 +431,7 @@ fn dtls13_handshake_aes_256_gcm() {
     // Leak the filtered vec to get a &'static slice
     let aes256_static: &'static [_] = Box::leak(aes256_only.into_boxed_slice());
 
-    let provider = dimpl::crypto::CryptoProvider {
+    let provider = dimpl13::crypto::CryptoProvider {
         dtls13_cipher_suites: aes256_static,
         ..default
     };
@@ -490,10 +490,10 @@ fn dtls13_handshake_aes_256_gcm() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_chacha20_poly1305() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
-    use dimpl::crypto::Dtls13CipherSuite;
-    use dimpl::crypto::aws_lc_rs;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
+    use dimpl13::crypto::Dtls13CipherSuite;
+    use dimpl13::crypto::aws_lc_rs;
 
     let _ = env_logger::try_init();
 
@@ -514,7 +514,7 @@ fn dtls13_handshake_chacha20_poly1305() {
 
     let chacha_static: &'static [_] = Box::leak(chacha_only.into_boxed_slice());
 
-    let provider = dimpl::crypto::CryptoProvider {
+    let provider = dimpl13::crypto::CryptoProvider {
         dtls13_cipher_suites: chacha_static,
         ..default
     };
@@ -573,10 +573,10 @@ fn dtls13_handshake_chacha20_poly1305() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_secp256r1_key_exchange() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
-    use dimpl::crypto::NamedGroup;
-    use dimpl::crypto::aws_lc_rs;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
+    use dimpl13::crypto::NamedGroup;
+    use dimpl13::crypto::aws_lc_rs;
 
     let _ = env_logger::try_init();
 
@@ -595,7 +595,7 @@ fn dtls13_handshake_secp256r1_key_exchange() {
 
     let p256_static: &'static [_] = Box::leak(p256_only.into_boxed_slice());
 
-    let client_provider = dimpl::crypto::CryptoProvider {
+    let client_provider = dimpl13::crypto::CryptoProvider {
         kx_groups: p256_static,
         ..default.clone()
     };
@@ -662,9 +662,9 @@ fn dtls13_handshake_secp256r1_key_exchange() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_x25519_key_exchange() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
-    use dimpl::crypto::NamedGroup;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
+    use dimpl13::crypto::NamedGroup;
 
     let _ = env_logger::try_init();
 
@@ -728,8 +728,8 @@ fn dtls13_handshake_x25519_key_exchange() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_client_certificate_auth() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -806,8 +806,8 @@ fn dtls13_handshake_client_certificate_auth() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_timeout_expires() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -863,10 +863,10 @@ fn dtls13_hrr_with_p256_then_x25519() {
     // Client offers P-256 key_share but server prefers X25519. Since the
     // client's key_share does not match the server's preferred group, the
     // server sends HelloRetryRequest asking the client to retry with X25519.
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
-    use dimpl::crypto::NamedGroup;
-    use dimpl::crypto::aws_lc_rs;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
+    use dimpl13::crypto::NamedGroup;
+    use dimpl13::crypto::aws_lc_rs;
 
     let _ = env_logger::try_init();
 
@@ -893,7 +893,7 @@ fn dtls13_hrr_with_p256_then_x25519() {
     });
     let client_groups_static: &'static [_] = Box::leak(client_groups_sorted.into_boxed_slice());
 
-    let client_provider = dimpl::crypto::CryptoProvider {
+    let client_provider = dimpl13::crypto::CryptoProvider {
         kx_groups: client_groups_static,
         ..default.clone()
     };
@@ -909,7 +909,7 @@ fn dtls13_hrr_with_p256_then_x25519() {
     server_groups_sorted.sort_by_key(|g| if g.name() == NamedGroup::X25519 { 0 } else { 1 });
     let server_groups_static: &'static [_] = Box::leak(server_groups_sorted.into_boxed_slice());
 
-    let server_provider = dimpl::crypto::CryptoProvider {
+    let server_provider = dimpl13::crypto::CryptoProvider {
         kx_groups: server_groups_static,
         ..default
     };
@@ -992,10 +992,10 @@ fn dtls13_hrr_with_p256_then_x25519() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_hrr_handshake_completes_after_packet_loss() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
-    use dimpl::crypto::NamedGroup;
-    use dimpl::crypto::aws_lc_rs;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
+    use dimpl13::crypto::NamedGroup;
+    use dimpl13::crypto::aws_lc_rs;
 
     let _ = env_logger::try_init();
 
@@ -1021,7 +1021,7 @@ fn dtls13_hrr_handshake_completes_after_packet_loss() {
     });
     let client_groups_static: &'static [_] = Box::leak(client_groups_sorted.into_boxed_slice());
 
-    let client_provider = dimpl::crypto::CryptoProvider {
+    let client_provider = dimpl13::crypto::CryptoProvider {
         kx_groups: client_groups_static,
         ..default.clone()
     };
@@ -1043,7 +1043,7 @@ fn dtls13_hrr_handshake_completes_after_packet_loss() {
     });
     let server_groups_static: &'static [_] = Box::leak(server_groups_sorted.into_boxed_slice());
 
-    let server_provider = dimpl::crypto::CryptoProvider {
+    let server_provider = dimpl13::crypto::CryptoProvider {
         kx_groups: server_groups_static,
         ..default
     };
@@ -1156,8 +1156,8 @@ fn dtls13_hrr_handshake_completes_after_packet_loss() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_no_client_auth() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1235,8 +1235,8 @@ fn dtls13_handshake_no_client_auth() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_no_client_auth_retransmit_finished() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1309,10 +1309,10 @@ fn dtls13_no_client_auth_retransmit_finished() {
 #[test]
 #[cfg(all(feature = "rcgen", feature = "rust-crypto"))]
 fn dtls13_handshake_chacha20_poly1305_rust_crypto() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
-    use dimpl::crypto::Dtls13CipherSuite;
-    use dimpl::crypto::rust_crypto;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
+    use dimpl13::crypto::Dtls13CipherSuite;
+    use dimpl13::crypto::rust_crypto;
 
     let _ = env_logger::try_init();
 
@@ -1333,7 +1333,7 @@ fn dtls13_handshake_chacha20_poly1305_rust_crypto() {
 
     let chacha_static: &'static [_] = Box::leak(chacha_only.into_boxed_slice());
 
-    let provider = dimpl::crypto::CryptoProvider {
+    let provider = dimpl13::crypto::CryptoProvider {
         dtls13_cipher_suites: chacha_static,
         ..default
     };
@@ -1392,10 +1392,10 @@ fn dtls13_handshake_chacha20_poly1305_rust_crypto() {
 #[test]
 #[cfg(all(feature = "rcgen", feature = "rust-crypto"))]
 fn dtls13_handshake_x25519_rust_crypto() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
-    use dimpl::crypto::NamedGroup;
-    use dimpl::crypto::rust_crypto;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
+    use dimpl13::crypto::NamedGroup;
+    use dimpl13::crypto::rust_crypto;
 
     let _ = env_logger::try_init();
 
@@ -1416,7 +1416,7 @@ fn dtls13_handshake_x25519_rust_crypto() {
 
     let x25519_static: &'static [_] = Box::leak(x25519_only.into_boxed_slice());
 
-    let provider = dimpl::crypto::CryptoProvider {
+    let provider = dimpl13::crypto::CryptoProvider {
         kx_groups: x25519_static,
         ..default
     };

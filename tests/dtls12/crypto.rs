@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::crypto::{Dtls12CipherSuite, SignatureAlgorithm};
-use dimpl::{Config, Dtls, Output};
+use dimpl13::crypto::{Dtls12CipherSuite, SignatureAlgorithm};
+use dimpl13::{Config, Dtls, Output};
 
 use crate::ossl_helper::{DtlsCertOptions, DtlsEvent, DtlsPKeyType, OsslDtlsCert};
 
@@ -137,7 +137,7 @@ fn run_dimpl_client_vs_ossl_server_for_suite(suite: Dtls12CipherSuite) {
 
     let mut client = Dtls::new_12(
         config,
-        dimpl::DtlsCertificate {
+        dimpl13::DtlsCertificate {
             certificate: client_x509_der,
             private_key: client_pkey_der,
         },
@@ -245,7 +245,7 @@ fn run_ossl_client_vs_dimpl_server_for_suite(suite: Dtls12CipherSuite) {
 
     let mut server = Dtls::new_12(
         config,
-        dimpl::DtlsCertificate {
+        dimpl13::DtlsCertificate {
             certificate: server_x509_der,
             private_key: server_pkey_der,
         },

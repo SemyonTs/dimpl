@@ -3,14 +3,14 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::Dtls;
+use dimpl13::Dtls;
 
 use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handles_duplicate_packets() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -71,7 +71,7 @@ fn dtls13_handles_duplicate_packets() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handles_out_of_order_packets() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -136,7 +136,7 @@ fn dtls13_handles_out_of_order_packets() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handles_severely_reordered_packets() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -211,7 +211,7 @@ fn dtls13_handles_severely_reordered_packets() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handles_delayed_burst_delivery() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -298,7 +298,7 @@ fn dtls13_handles_delayed_burst_delivery() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handles_interleaved_old_and_new_packets() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -376,7 +376,7 @@ fn dtls13_handles_interleaved_old_and_new_packets() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_replay_window_rejects_old_record() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -464,7 +464,7 @@ fn dtls13_replay_window_rejects_old_record() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_replay_window_rejects_duplicate_app_data() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -540,7 +540,7 @@ fn dtls13_replay_window_rejects_duplicate_app_data() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_replay_window_accepts_within_range() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -632,7 +632,7 @@ fn dtls13_replay_window_accepts_within_range() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_reorder_app_data_after_handshake() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 

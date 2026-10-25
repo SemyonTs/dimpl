@@ -5,8 +5,8 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use dimpl::certificate::generate_self_signed_certificate;
-use dimpl::{Dtls, Error};
+use dimpl13::certificate::generate_self_signed_certificate;
+use dimpl13::{Dtls, Error};
 
 use crate::common::{default_config, drain_outputs};
 

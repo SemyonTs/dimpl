@@ -3,8 +3,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::crypto::Dtls12CipherSuite;
-use dimpl::{Config, Dtls, Error, PskResolver};
+use dimpl13::crypto::Dtls12CipherSuite;
+use dimpl13::{Config, Dtls, Error, PskResolver};
 
 use crate::common::{deliver_packets, drain_outputs};
 
@@ -24,7 +24,7 @@ impl PskResolver for FixedPsk {
     }
 }
 
-fn psk_provider(suite: Dtls12CipherSuite) -> dimpl::crypto::CryptoProvider {
+fn psk_provider(suite: Dtls12CipherSuite) -> dimpl13::crypto::CryptoProvider {
     let mut provider = Config::default().crypto_provider().clone();
     let psk_suite = provider
         .cipher_suites
@@ -201,13 +201,13 @@ fn psk_invalid_identity_fails_at_finished() {
         }
     }
 
-    let server_config = dimpl::Config::builder()
+    let server_config = dimpl13::Config::builder()
         .with_psk_server(None, Arc::new(FailingResolver))
         .build()
         .expect("server config should build");
     let mut server = Dtls::new_12_psk(Arc::new(server_config), Instant::now());
 
-    let client_config = dimpl::Config::builder()
+    let client_config = dimpl13::Config::builder()
         .with_psk_client(b"test_identity".to_vec(), Arc::new(PassingResolver))
         .build()
         .expect("client config should build");
@@ -299,13 +299,13 @@ fn psk_mismatched_keys_fail_at_finished_via_mac() {
         }
     }
 
-    let server_config = dimpl::Config::builder()
+    let server_config = dimpl13::Config::builder()
         .with_psk_server(None, Arc::new(ZeroKey))
         .build()
         .expect("server config should build");
     let mut server = Dtls::new_12_psk(Arc::new(server_config), Instant::now());
 
-    let client_config = dimpl::Config::builder()
+    let client_config = dimpl13::Config::builder()
         .with_psk_client(b"test_identity".to_vec(), Arc::new(OneKey))
         .build()
         .expect("client config should build");
@@ -386,13 +386,13 @@ fn psk_valid_identity_succeeds() {
         }
     }
 
-    let server_config = dimpl::Config::builder()
+    let server_config = dimpl13::Config::builder()
         .with_psk_server(None, Arc::new(AlwaysPassResolver))
         .build()
         .expect("server config should build");
     let mut server = Dtls::new_12_psk(Arc::new(server_config), Instant::now());
 
-    let client_config = dimpl::Config::builder()
+    let client_config = dimpl13::Config::builder()
         .with_psk_client(b"test_identity".to_vec(), Arc::new(AlwaysPassResolver))
         .build()
         .expect("client config should build");

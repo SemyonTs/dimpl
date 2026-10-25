@@ -5,8 +5,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::certificate::generate_self_signed_certificate;
-use dimpl::{Config, Dtls, DtlsCertificate, Error, Output, ProtocolVersion, TimeoutError};
+use dimpl13::certificate::generate_self_signed_certificate;
+use dimpl13::{Config, Dtls, DtlsCertificate, Error, Output, ProtocolVersion, TimeoutError};
 
 #[path = "dtls13/common.rs"]
 mod common;

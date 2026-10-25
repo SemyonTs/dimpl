@@ -3,13 +3,13 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::Dtls;
+use dimpl13::Dtls;
 
 use crate::common::*;
 
 #[test]
 fn dtls12_discards_scrambled_datagram_and_accepts_clean_retransmission() {
-    use dimpl::{Config, DtlsCertificate};
+    use dimpl13::{Config, DtlsCertificate};
 
     use crate::ossl_helper::{DtlsCertOptions, OsslDtlsCert};
 
@@ -117,7 +117,7 @@ fn dtls12_discards_scrambled_datagram_and_accepts_clean_retransmission() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_handles_duplicate_packets() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -183,7 +183,7 @@ fn dtls12_handles_duplicate_packets() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_handles_out_of_order_packets() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -250,7 +250,7 @@ fn dtls12_replay_window_rejects_old_app_data() {
     //! Then replay the very first encrypted packet. The replayed packet
     //! should be silently dropped (not delivered as application data again).
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -347,7 +347,7 @@ fn dtls12_replay_window_rejects_duplicate_app_data() {
     //! After handshake, send one app data message. Deliver it, then deliver
     //! the exact same encrypted packet again. Only one copy should be received.
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -429,7 +429,7 @@ fn dtls12_handles_delayed_burst_delivery() {
     //! During handshake, hold all packets for 3 rounds of timeouts, then
     //! deliver them all at once in a burst. Verify handshake still completes.
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 

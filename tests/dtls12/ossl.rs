@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::{Config, Dtls, Output};
+use dimpl13::{Config, Dtls, Output};
 
 use crate::ossl_helper::{DtlsCertOptions, DtlsEvent, OsslDtlsCert};
 
@@ -44,7 +44,7 @@ fn dtls12_ossl_client_handshake() {
 
     let mut client = Dtls::new_12(
         config,
-        dimpl::DtlsCertificate {
+        dimpl13::DtlsCertificate {
             certificate: client_x509_der,
             private_key: client_pkey_der,
         },
@@ -254,7 +254,7 @@ fn dtls12_ossl_server_handshake() {
 
     let mut server = Dtls::new_12(
         config,
-        dimpl::DtlsCertificate {
+        dimpl13::DtlsCertificate {
             certificate: server_x509_der,
             private_key: server_pkey_der,
         },
@@ -434,7 +434,7 @@ fn dtls12_ossl_client_retransmit_on_timeout() {
     let mut now = Instant::now();
     let mut client = Dtls::new_12(
         config,
-        dimpl::DtlsCertificate {
+        dimpl13::DtlsCertificate {
             certificate: client_x509_der,
             private_key: client_pkey_der,
         },
@@ -591,7 +591,7 @@ fn dtls12_ossl_client_handles_duplicates() {
 
     let mut client = Dtls::new_12(
         config,
-        dimpl::DtlsCertificate {
+        dimpl13::DtlsCertificate {
             certificate: client_x509_der,
             private_key: client_pkey_der,
         },
@@ -749,7 +749,7 @@ fn dtls12_ossl_server_bidirectional_data() {
 
     let mut server = Dtls::new_12(
         config,
-        dimpl::DtlsCertificate {
+        dimpl13::DtlsCertificate {
             certificate: server_x509_der,
             private_key: server_pkey_der,
         },

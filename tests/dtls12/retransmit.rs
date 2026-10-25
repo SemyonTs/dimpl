@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, Output};
+use dimpl13::{Config, Dtls, Output};
 
 use crate::common::*;
 
@@ -21,7 +21,7 @@ struct FinalFlightResend {
 
 #[cfg(feature = "rcgen")]
 fn prepare_server_final_flight_resend(max_queue_rx: usize) -> FinalFlightResend {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let mut now = Instant::now();
 
@@ -163,7 +163,7 @@ fn first_record_matching(datagrams: &[Vec<u8>], content_type: u8, epoch: u16) ->
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_client_hello_retransmits_using_advertised_deadlines() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let now = Instant::now();
     let certificate = generate_self_signed_certificate().expect("generate client certificate");
@@ -208,7 +208,7 @@ fn dtls12_resends_each_flight_epoch_and_sequence_increase() {
     let now0 = Instant::now();
     let mut now = now0;
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     // Certificates for client and server
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -347,7 +347,7 @@ fn dtls12_resend_replaces_pending_handshake_flight_tail() {
     let now0 = Instant::now();
     let mut now = now0;
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
@@ -716,7 +716,7 @@ fn dtls12_late_epoch0_handshake_trailing_app_data_does_not_pin_receive_queue() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_handshake_completes_after_packet_loss() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
@@ -784,7 +784,7 @@ fn dtls12_handshake_completes_after_packet_loss() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_handshake_completes_with_early_packet_loss() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
@@ -869,7 +869,7 @@ fn dtls12_handshake_completes_with_early_packet_loss() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_survives_random_packet_loss_pattern() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
@@ -960,7 +960,7 @@ fn dtls12_survives_random_packet_loss_pattern() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_retransmit_exponential_backoff() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
 
@@ -1042,7 +1042,7 @@ fn dtls12_retransmit_exponential_backoff() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_handshake_timeout_aborts() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
 
@@ -1206,7 +1206,7 @@ fn forged_epoch1_app_data() -> Vec<u8> {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_forged_epoch1_appdata_before_encryption_does_not_confirm_peer() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -1295,7 +1295,7 @@ fn dtls12_forged_epoch1_appdata_before_encryption_does_not_confirm_peer() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_duplicate_epoch1_before_ccs_is_dropped() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 

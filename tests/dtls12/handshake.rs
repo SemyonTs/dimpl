@@ -3,14 +3,14 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, SrtpProfile};
+use dimpl13::{Config, Dtls, SrtpProfile};
 
 use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_client_certificate_not_required() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let now = Instant::now();
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -30,8 +30,8 @@ fn dtls12_client_certificate_not_required() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_empty_client_certificate_is_rejected_when_required() {
-    use dimpl::certificate::generate_self_signed_certificate;
-    use dimpl::{CertificateError, Error};
+    use dimpl13::certificate::generate_self_signed_certificate;
+    use dimpl13::{CertificateError, Error};
 
     let mut now = Instant::now();
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
@@ -88,7 +88,7 @@ fn dtls12_cookie_retry_proceeds_to_server_hello() {
     //! Verify that after HelloVerifyRequest, the ClientHello with cookie
     //! is properly processed and the server sends ServerHello (not another HVR).
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let now = Instant::now();
 
@@ -204,7 +204,7 @@ fn dtls12_parallel_handshakes_with_cookies() {
     //! Test multiple parallel DTLS handshakes to ensure cookie handling
     //! works correctly under concurrent load (the original bug scenario).
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let now = Instant::now();
 
@@ -282,7 +282,7 @@ fn dtls12_retransmit_no_cookie_after_cookie_sent() {
     //! 4. Client's timer fires and it ALSO retransmits the original no-cookie ClientHello
     //! 5. Server should NOT get confused by this out-of-order retransmit
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let now = Instant::now();
 
@@ -371,7 +371,7 @@ fn dtls12_retransmit_no_cookie_before_cookie_received() {
     //! 5. Client sends ClientHello (seq=1, with cookie)
     //! 6. Server should process it and send ServerHello
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let now = Instant::now();
 
@@ -475,7 +475,7 @@ fn dtls12_basic_handshake() {
     //! Complete a full dimpl-to-dimpl DTLS 1.2 handshake and verify both
     //! client and server reach the connected state.
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
@@ -527,7 +527,7 @@ fn dtls12_handshake_with_keying_material() {
     //! Complete a DTLS 1.2 handshake with SRTP profile configured and verify
     //! both sides derive identical SRTP keying material.
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
@@ -592,7 +592,7 @@ fn dtls12_peer_certificate_exchange() {
     //! Complete a DTLS 1.2 handshake and verify the client can access the
     //! server's certificate and the server can access the client's certificate.
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
@@ -665,7 +665,7 @@ fn dtls12_handshake_client_certificate_auth() {
     //! handshake, and verify the server received and validated the client
     //! certificate.
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
@@ -735,22 +735,22 @@ fn dtls12_handshake_secp384r1_key_exchange() {
     //! Configure to use only P-384 for key exchange, complete the handshake,
     //! and verify both sides reach connected.
 
-    use dimpl::certificate::generate_self_signed_certificate;
-    use dimpl::crypto::aws_lc_rs;
+    use dimpl13::certificate::generate_self_signed_certificate;
+    use dimpl13::crypto::aws_lc_rs;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
 
     // Build a crypto provider with only the P-384 key exchange group.
     let mut provider = aws_lc_rs::default_provider();
-    let p384_vec: Vec<&'static dyn dimpl::crypto::SupportedKxGroup> = provider
+    let p384_vec: Vec<&'static dyn dimpl13::crypto::SupportedKxGroup> = provider
         .kx_groups
         .iter()
         .copied()
-        .filter(|g| g.name() == dimpl::NamedGroup::Secp384r1)
+        .filter(|g| g.name() == dimpl13::NamedGroup::Secp384r1)
         .collect();
     // leak: intentional leak to produce a &'static slice for the provider field
-    let p384_only: &'static [&'static dyn dimpl::crypto::SupportedKxGroup] =
+    let p384_only: &'static [&'static dyn dimpl13::crypto::SupportedKxGroup] =
         Box::leak(p384_vec.into_boxed_slice());
     provider.kx_groups = p384_only;
 
@@ -806,7 +806,7 @@ fn dtls12_handshake_timeout_expires() {
     //! Create client and server but never deliver packets. Trigger timeouts
     //! repeatedly and verify the handshake eventually times out/fails.
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
@@ -891,7 +891,7 @@ fn dtls12_handshake_p384_certificate() {
 
     let mut client = Dtls::new_12(
         Arc::clone(&config),
-        dimpl::DtlsCertificate {
+        dimpl13::DtlsCertificate {
             certificate: client_cert.x509.to_der().expect("client cert der"),
             private_key: client_cert
                 .pkey
@@ -904,7 +904,7 @@ fn dtls12_handshake_p384_certificate() {
 
     let mut server = Dtls::new_12(
         config,
-        dimpl::DtlsCertificate {
+        dimpl13::DtlsCertificate {
             certificate: server_cert.x509.to_der().expect("server cert der"),
             private_key: server_cert
                 .pkey

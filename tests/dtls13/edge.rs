@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "rcgen")]
-use dimpl::certificate::generate_self_signed_certificate;
-use dimpl::{Config, Dtls, Output};
+use dimpl13::certificate::generate_self_signed_certificate;
+use dimpl13::{Config, Dtls, Output};
 
 use crate::common::*;
 
@@ -435,7 +435,7 @@ fn dtls13_unknown_warning_level_alert_is_still_fatal() {
         .expect_err("non-whitelisted alert must be fatal regardless of level");
     assert!(matches!(
         err,
-        dimpl::Error::SecurityError(dimpl::SecurityError::FatalAlert { description: 40 })
+        dimpl13::Error::SecurityError(dimpl13::SecurityError::FatalAlert { description: 40 })
     ));
 }
 

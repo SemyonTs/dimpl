@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls};
+use dimpl13::{Config, Dtls};
 
 use crate::common::*;
 
@@ -12,7 +12,7 @@ use crate::common::*;
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_key_update_on_aead_limit() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -94,7 +94,7 @@ fn dtls13_key_update_on_aead_limit() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_key_update_bidirectional_after_limit() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -207,7 +207,7 @@ fn dtls13_key_update_bidirectional_after_limit() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_key_update_old_epoch_packet_still_decrypted() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -350,7 +350,7 @@ fn dtls13_key_update_old_epoch_packet_still_decrypted() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_key_update_multiple_sequential() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -435,7 +435,7 @@ fn dtls13_key_update_multiple_sequential() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_key_update_with_packet_loss() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -562,7 +562,7 @@ fn dtls13_key_update_with_packet_loss() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_key_update_high_frequency() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -645,7 +645,7 @@ fn dtls13_key_update_high_frequency() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_key_update_retransmission_is_acked_again() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     for sender_is_client in [false, true] {
         let now = Instant::now();

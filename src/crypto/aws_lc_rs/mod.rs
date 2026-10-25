@@ -23,7 +23,7 @@
 //! # fn main() {
 //! use std::sync::Arc;
 //! use std::time::Instant;
-//! use dimpl::{Config, Dtls, certificate};
+//! use dimpl13::{Config, Dtls, certificate};
 //!
 //! let cert = certificate::generate_self_signed_certificate().unwrap();
 //! // Implicitly uses aws-lc-rs default provider
@@ -41,8 +41,8 @@
 //! # fn main() {
 //! use std::sync::Arc;
 //! use std::time::Instant;
-//! use dimpl::{Config, Dtls, certificate};
-//! use dimpl::crypto::aws_lc_rs;
+//! use dimpl13::{Config, Dtls, certificate};
+//! use dimpl13::crypto::aws_lc_rs;
 //!
 //! let cert = certificate::generate_self_signed_certificate().unwrap();
 //! let config = Arc::new(

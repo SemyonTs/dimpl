@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dimpl::certificate::generate_self_signed_certificate;
-use dimpl::{Config, Dtls};
+use dimpl13::certificate::generate_self_signed_certificate;
+use dimpl13::{Config, Dtls};
 
 #[path = "dtls13/common.rs"]
 mod common;

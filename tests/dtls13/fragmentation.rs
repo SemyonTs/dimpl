@@ -3,14 +3,14 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls};
+use dimpl13::{Config, Dtls};
 
 use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_handshake_with_small_mtu() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -75,7 +75,7 @@ fn dtls13_handshake_with_small_mtu() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_large_application_data_fragmented() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -146,7 +146,7 @@ fn dtls13_large_application_data_fragmented() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_fragmentation_during_hrr() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -237,7 +237,7 @@ fn dtls13_fragmentation_during_hrr() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_fragmented_handshake_with_packet_loss() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -366,7 +366,7 @@ fn dtls13_fragmented_handshake_with_packet_loss() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_overlapping_fragments_reassembled_successfully() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 

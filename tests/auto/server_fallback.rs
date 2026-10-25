@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, Output, ProtocolVersion, PskResolver};
+use dimpl13::{Config, Dtls, Output, ProtocolVersion, PskResolver};
 
 use crate::common::*;
 
@@ -60,7 +60,7 @@ fn run_handshake(
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_with_dtls13_client() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -88,7 +88,7 @@ fn auto_server_with_dtls13_client() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_send_application_data_pending() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().unwrap();
     let server_cert = generate_self_signed_certificate().unwrap();
@@ -115,7 +115,7 @@ fn auto_server_send_application_data_pending() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_protocol_version_pending() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().unwrap();
     let server_cert = generate_self_signed_certificate().unwrap();
@@ -139,7 +139,7 @@ fn auto_server_protocol_version_pending() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_with_dtls12_client() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -167,7 +167,7 @@ fn auto_server_with_dtls12_client() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_with_auto_client() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -196,7 +196,7 @@ fn auto_server_with_auto_client() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_with_dtls12_client_no_cookie() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -225,7 +225,7 @@ fn auto_server_with_dtls12_client_no_cookie() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_with_dtls13_client_no_cookie() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -254,7 +254,7 @@ fn auto_server_with_dtls13_client_no_cookie() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_dtls12_fallback_application_data() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -309,7 +309,7 @@ fn auto_server_dtls12_fallback_application_data() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_dtls13_application_data() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -364,8 +364,8 @@ fn auto_server_dtls13_application_data() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_dtls12_fallback_keying_material() {
-    use dimpl::SrtpProfile;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::SrtpProfile;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -425,8 +425,8 @@ fn auto_server_dtls12_fallback_keying_material() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_dtls13_keying_material() {
-    use dimpl::SrtpProfile;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::SrtpProfile;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -486,7 +486,7 @@ fn auto_server_dtls13_keying_material() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_set_active_creates_client_pending() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let cert = generate_self_signed_certificate().unwrap();
     let config = default_config();
@@ -515,7 +515,7 @@ fn auto_server_set_active_creates_client_pending() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_with_fragmented_dtls13_client_hello() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -543,7 +543,7 @@ fn auto_server_with_fragmented_dtls13_client_hello() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_with_heavily_fragmented_dtls13_client_hello() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -570,7 +570,7 @@ fn auto_server_with_heavily_fragmented_dtls13_client_hello() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_fragmented_ch_application_data() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -609,7 +609,7 @@ fn auto_server_fragmented_ch_application_data() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_fragmented_ch_no_cookie() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -643,7 +643,7 @@ fn auto_server_fragmented_ch_no_cookie() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_psk_fallback_with_dtls12_psk_client() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -686,8 +686,8 @@ fn auto_server_psk_fallback_with_dtls12_psk_client() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_server_fragmented_ch_keying_material() {
-    use dimpl::SrtpProfile;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::SrtpProfile;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 

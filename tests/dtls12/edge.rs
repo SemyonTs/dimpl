@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "rcgen")]
-use dimpl::certificate::generate_self_signed_certificate;
-use dimpl::crypto::Dtls12CipherSuite;
-use dimpl::{Config, Dtls, Output};
+use dimpl13::certificate::generate_self_signed_certificate;
+use dimpl13::crypto::Dtls12CipherSuite;
+use dimpl13::{Config, Dtls, Output};
 
 use crate::common::*;
 
@@ -789,7 +789,7 @@ fn dtls12_relabelled_encrypted_handshake_failure_is_not_silently_discarded() {
     assert!(
         matches!(
             observed_error,
-            Some(dimpl::Error::CryptoError(_) | dimpl::Error::SecurityError(_))
+            Some(dimpl13::Error::CryptoError(_) | dimpl13::Error::SecurityError(_))
         ),
         "relabeled encrypted handshake must remain fatal, got {observed_error:?}"
     );
@@ -1119,7 +1119,7 @@ fn dtls12_fatal_alert_during_handshake() {
     let err = result.unwrap_err();
     assert!(matches!(
         err,
-        dimpl::Error::SecurityError(dimpl::SecurityError::FatalAlert { description: 40 })
+        dimpl13::Error::SecurityError(dimpl13::SecurityError::FatalAlert { description: 40 })
     ));
 }
 

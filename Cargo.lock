@@ -477,7 +477,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dimpl"
+name = "dimpl13"
 version = "0.8.0"
 dependencies = [
  "aes",

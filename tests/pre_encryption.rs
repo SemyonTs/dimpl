@@ -3,8 +3,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::certificate::generate_self_signed_certificate;
-use dimpl::{Config, Dtls, Error, Output, UnexpectedMessageError};
+use dimpl13::certificate::generate_self_signed_certificate;
+use dimpl13::{Config, Dtls, Error, Output, UnexpectedMessageError};
 
 const UNAUTHENTICATED_INPUT: &[u8] = b"unauthenticated input";
 

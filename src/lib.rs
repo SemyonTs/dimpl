@@ -83,13 +83,13 @@
 //! use std::sync::Arc;
 //! use std::time::Instant;
 //!
-//! use dimpl::{certificate, Config, Dtls, Output};
+//! use dimpl13::{certificate, Config, Dtls, Output};
 //!
 //! enum Event { Udp(Vec<u8>, Instant), Timer(Instant) }
 //! fn wait_next_event(_next_wake: Option<Instant>) -> Event { Event::Udp(Vec::new(), Instant::now()) }
 //! fn send_udp(_bytes: &[u8]) {}
 //!
-//! fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl::Error> {
+//! fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl13::Error> {
 //!     let mut next_wake: Option<Instant> = None;
 //!     let mut received_packet: Option<Vec<u8>> = None;
 //!     loop {

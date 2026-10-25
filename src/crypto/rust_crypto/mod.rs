@@ -23,8 +23,8 @@
 //! # fn main() {
 //! use std::sync::Arc;
 //! use std::time::Instant;
-//! use dimpl::{Config, Dtls, certificate};
-//! use dimpl::crypto::rust_crypto;
+//! use dimpl13::{Config, Dtls, certificate};
+//! use dimpl13::crypto::rust_crypto;
 //!
 //! let cert = certificate::generate_self_signed_certificate().unwrap();
 //! let config = Arc::new(

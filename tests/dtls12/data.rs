@@ -3,14 +3,14 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::Dtls;
+use dimpl13::Dtls;
 
 use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_application_data_exchange() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -98,7 +98,7 @@ fn dtls12_application_data_exchange() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_multiple_application_data_messages() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -189,7 +189,7 @@ fn dtls12_multiple_application_data_messages() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_bidirectional_data_exchange() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -281,7 +281,7 @@ fn dtls12_bidirectional_data_exchange() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_many_small_messages() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -354,7 +354,7 @@ fn dtls12_many_small_messages() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls12_large_application_data() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 

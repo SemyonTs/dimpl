@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, Output};
+use dimpl13::{Config, Dtls, Output};
 
 use crate::common::*;
 use crate::ossl_helper::{DtlsCertOptions, DtlsEvent, OsslDtlsCert};
@@ -50,7 +50,7 @@ fn run_client_server_with_mtu(mtu: usize) -> (usize, usize) {
 
     let mut client = Dtls::new_12(
         config,
-        dimpl::DtlsCertificate {
+        dimpl13::DtlsCertificate {
             certificate: client_x509_der,
             private_key: client_pkey_der,
         },
@@ -222,7 +222,7 @@ fn dtls12_fragmentation_dimpl_to_dimpl() {
     //! Verify that a dimpl-to-dimpl handshake completes successfully with a
     //! small MTU that forces handshake message fragmentation.
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -301,7 +301,7 @@ fn dtls12_fragmented_handshake_with_packet_loss() {
     //! Drop the first packet of the first flight, then trigger a retransmit.
     //! Verify the handshake still completes.
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -382,7 +382,7 @@ fn dtls12_out_of_order_fragments() {
     //! reverse the packet order. Verify the handshake still completes, proving
     //! fragment reassembly handles out-of-order delivery.
 
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 

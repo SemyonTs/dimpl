@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Dtls, Error, Output};
+use dimpl13::{Dtls, Error, Output};
 
 use crate::common::*;
 
@@ -15,7 +15,7 @@ use crate::common::*;
 fn auto_client_to_dtls13_server() {
     //! An auto-sensing client should complete a full handshake against an
     //! explicit DTLS 1.3 server.
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -73,8 +73,8 @@ fn auto_client_to_dtls13_server() {
 fn auto_client_to_dtls13_server_keying_material() {
     //! Verify that an auto-client and DTLS 1.3 server derive identical
     //! SRTP keying material.
-    use dimpl::SrtpProfile;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::SrtpProfile;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -139,7 +139,7 @@ fn auto_client_to_dtls13_server_keying_material() {
 fn auto_client_to_auto_server() {
     //! Both sides use auto-sense. They should negotiate DTLS 1.3 (the
     //! hybrid CH includes supported_versions with DTLS 1.3 first).
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -198,7 +198,7 @@ fn auto_client_to_auto_server() {
 fn auto_client_to_dtls12_server() {
     //! An auto-sensing client against an explicit DTLS 1.2 server.
     //! The server sends HelloVerifyRequest, triggering the 1.2 fork.
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -257,8 +257,8 @@ fn auto_client_to_dtls12_server() {
 fn auto_client_to_dtls12_server_keying_material() {
     //! Verify that an auto-client and DTLS 1.2 server derive identical
     //! SRTP keying material after HVR-based version negotiation.
-    use dimpl::SrtpProfile;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::SrtpProfile;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -324,7 +324,7 @@ fn auto_client_to_dtls12_server_keying_material() {
 fn auto_client_to_dtls13_server_application_data() {
     //! After handshake, auto-client and DTLS 1.3 server can exchange
     //! application data in both directions.
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -408,7 +408,7 @@ fn auto_client_to_dtls12_server_no_cookie() {
     //! An auto-sensing client against a DTLS 1.2 server that skips
     //! HelloVerifyRequest (use_server_cookie = false). The server sends
     //! ServerHello directly.
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -468,7 +468,7 @@ fn auto_client_to_dtls12_server_no_cookie() {
 fn auto_client_to_dtls13_server_no_cookie() {
     //! An auto-sensing client against a DTLS 1.3 server that skips
     //! HelloRetryRequest cookie exchange (use_server_cookie = false).
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -527,7 +527,7 @@ fn auto_client_to_dtls13_server_no_cookie() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_client_poll_output_undersized_buffer() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -566,7 +566,7 @@ fn auto_client_poll_output_undersized_buffer() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn auto_client_rejects_unknown_version_response() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -591,8 +591,9 @@ fn auto_client_rejects_unknown_version_response() {
         "Unknown version response should be an error"
     );
     match result.unwrap_err() {
-        Error::UnexpectedMessage(dimpl::UnexpectedMessageError::UnrecognizedAutoServerResponse) => {
-        }
+        Error::UnexpectedMessage(
+            dimpl13::UnexpectedMessageError::UnrecognizedAutoServerResponse,
+        ) => {}
         other => panic!("expected UnexpectedMessage, got: {other:?}"),
     }
 }
@@ -602,8 +603,8 @@ fn auto_client_rejects_unknown_version_response() {
 fn auto_client_protocol_version_after_negotiating_dtls13() {
     //! After completing a handshake against a DTLS 1.3 server, the
     //! auto-sense client should report `Some(ProtocolVersion::DTLS1_3)`.
-    use dimpl::ProtocolVersion;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::ProtocolVersion;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -660,8 +661,8 @@ fn auto_client_protocol_version_after_negotiating_dtls13() {
 fn auto_client_protocol_version_after_negotiating_dtls12() {
     //! After completing a handshake against a DTLS 1.2 server, the
     //! auto-sense client should report `Some(ProtocolVersion::DTLS1_2)`.
-    use dimpl::ProtocolVersion;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::ProtocolVersion;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 

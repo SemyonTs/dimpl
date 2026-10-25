@@ -30,8 +30,8 @@
 //! # fn main() {
 //! use std::sync::Arc;
 //! use std::time::Instant;
-//! use dimpl::{Config, Dtls, certificate};
-//! use dimpl::crypto::aws_lc_rs;
+//! use dimpl13::{Config, Dtls, certificate};
+//! use dimpl13::crypto::aws_lc_rs;
 //!
 //! let cert = certificate::generate_self_signed_certificate().unwrap();
 //! // Use the default aws-lc-rs provider (implicit)
@@ -338,7 +338,7 @@ pub trait SupportedDtls13CipherSuite: CryptoSafe {
 /// ```
 /// # #[cfg(feature = "aws-lc-rs")]
 /// # fn main() {
-/// use dimpl::crypto::{CryptoProvider, aws_lc_rs};
+/// use dimpl13::crypto::{CryptoProvider, aws_lc_rs};
 ///
 /// // Use the default provider
 /// let provider = aws_lc_rs::default_provider();
@@ -406,7 +406,7 @@ impl CryptoProvider {
     /// ```
     /// # #[cfg(feature = "aws-lc-rs")]
     /// # fn main() {
-    /// use dimpl::crypto::{CryptoProvider, aws_lc_rs};
+    /// use dimpl13::crypto::{CryptoProvider, aws_lc_rs};
     ///
     /// // Install a default provider (can only be called once per process)
     /// CryptoProvider::install_default(aws_lc_rs::default_provider());
@@ -431,7 +431,7 @@ impl CryptoProvider {
     /// # Example
     ///
     /// ```
-    /// use dimpl::crypto::CryptoProvider;
+    /// use dimpl13::crypto::CryptoProvider;
     ///
     /// if let Some(provider) = CryptoProvider::get_default() {
     ///     // Use the installed default provider

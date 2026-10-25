@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::time::{Duration, Instant};
 
-use dimpl::SrtpProfile;
+use dimpl13::SrtpProfile;
 use openssl::dh::Dh;
 use openssl::ssl::{Ssl, SslContext, SslContextBuilder, SslMethod, SslOptions, SslVerifyMode};
 

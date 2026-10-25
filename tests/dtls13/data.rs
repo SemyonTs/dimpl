@@ -3,14 +3,14 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Dtls, Output};
+use dimpl13::{Dtls, Output};
 
 use crate::common::*;
 
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_application_data_exchange() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -98,7 +98,7 @@ fn dtls13_application_data_exchange() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_multiple_application_data_messages() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -174,7 +174,7 @@ fn dtls13_multiple_application_data_messages() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_bidirectional_data_exchange() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -252,7 +252,7 @@ fn dtls13_bidirectional_data_exchange() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_many_small_messages() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -320,7 +320,7 @@ fn dtls13_many_small_messages() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_piggybacks_app_data_with_finished() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -417,7 +417,7 @@ fn dtls13_piggybacks_app_data_with_finished() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_server_piggybacks_app_data_with_finished() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -524,7 +524,7 @@ fn dtls13_server_piggybacks_app_data_with_finished() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_caches_app_data_when_handshake_packet_lost() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -647,7 +647,7 @@ fn dtls13_caches_app_data_when_handshake_packet_lost() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_large_application_data() {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -743,8 +743,8 @@ fn dtls13_large_application_data() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_data_after_key_update() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -837,8 +837,8 @@ fn dtls13_data_after_key_update() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_queue_overflow_tx() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -891,7 +891,7 @@ fn dtls13_queue_overflow_tx() {
             Err(e) => {
                 eprintln!("TX queue overflow at message {}: {}", i, e);
                 assert!(
-                    matches!(e, dimpl::Error::TransmitQueueFull),
+                    matches!(e, dimpl13::Error::TransmitQueueFull),
                     "Expected TransmitQueueFull, got: {}",
                     e
                 );
@@ -915,8 +915,8 @@ fn dtls13_queue_overflow_tx() {
 #[test]
 #[cfg(feature = "rcgen")]
 fn dtls13_queue_overflow_rx() {
-    use dimpl::Config;
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::Config;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let _ = env_logger::try_init();
 
@@ -980,7 +980,7 @@ fn dtls13_queue_overflow_rx() {
             Err(e) => {
                 eprintln!("RX queue overflow at packet {}: {}", i, e);
                 assert!(
-                    matches!(e, dimpl::Error::ReceiveQueueFull),
+                    matches!(e, dimpl13::Error::ReceiveQueueFull),
                     "Expected ReceiveQueueFull, got: {}",
                     e
                 );

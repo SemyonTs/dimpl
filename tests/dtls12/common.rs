@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dimpl::{Config, Dtls, Output, SrtpProfile};
+use dimpl13::{Config, Dtls, Output, SrtpProfile};
 
 /// Parsed DTLS 1.2 record header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,7 +216,7 @@ pub fn complete_dtls12_handshake(
 /// Returns `(client, server, now)` with the handshake already completed.
 #[cfg(feature = "rcgen")]
 pub fn setup_connected_12_pair(now: Instant) -> (Dtls, Dtls, Instant) {
-    use dimpl::certificate::generate_self_signed_certificate;
+    use dimpl13::certificate::generate_self_signed_certificate;
 
     let client_cert = generate_self_signed_certificate().expect("gen client cert");
     let server_cert = generate_self_signed_certificate().expect("gen server cert");
