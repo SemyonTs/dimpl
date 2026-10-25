@@ -1,4 +1,9 @@
 # dimpl13
+[![dimpl13](https://img.shields.io/crates/v/dimpl13?label=dimpl13&logo=rust)](https://crates.io/crates/dimpl13)
+[![Downloads](https://img.shields.io/crates/d/dimpl13?label=downloads)](https://crates.io/crates/dimpl13)
+[![License](https://img.shields.io/crates/l/dimpl13?label=license)](https://crates.io/crates/dimpl13)
+[![docs.rs](https://img.shields.io/docsrs/dimpl13?label=docs.rs)](https://docs.rs/dimpl13)
+[![MSRV](https://img.shields.io/badge/MSRV-1.85.0-blue)](https://blog.rust-lang.org/)
 
 **dimpl13** is a separate fork of [dimpl](https://github.com/algesten/dimpl) aimed at
 building a sufficiently performant and convenient middleware for **DTLS 1.3**
