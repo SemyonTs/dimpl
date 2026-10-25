@@ -11,7 +11,7 @@ use der::{Decode, Encode};
 use spki::ObjectIdentifier;
 use x509_cert::Certificate as X509Certificate;
 
-use super::super::{KeyProvider, SignatureVerifier, SigningKey, check_verify_scheme};
+use super::super::{KeyProvider, SignatureVerifier, SigningKey};
 use super::super::{OID_P256, OID_P384};
 use crate::buffer::Buf;
 use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
@@ -226,15 +226,22 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
             _ => return Err(CryptoError::UnsupportedEcCurve),
         };
 
-        check_verify_scheme(sig_alg, hash_alg, group)?;
+        if sig_alg != SignatureAlgorithm::ECDSA {
+            return Err(CryptoError::UnsupportedSignatureAlgorithm(sig_alg));
+        }
 
         let algorithm: &EcdsaVerificationAlgorithm = match (group, hash_alg) {
             (NamedGroup::Secp256r1, HashAlgorithm::SHA256) => &ECDSA_P256_SHA256_ASN1,
             (NamedGroup::Secp256r1, HashAlgorithm::SHA384) => &ECDSA_P256_SHA384_ASN1,
             (NamedGroup::Secp384r1, HashAlgorithm::SHA256) => &ECDSA_P384_SHA256_ASN1,
             (NamedGroup::Secp384r1, HashAlgorithm::SHA384) => &ECDSA_P384_SHA384_ASN1,
-            // unreachable: check_verify_scheme already validated
-            _ => unreachable!(),
+            _ => {
+                return Err(CryptoError::UnsupportedSignatureVerification {
+                    signature: sig_alg,
+                    hash: hash_alg,
+                    group,
+                });
+            }
         };
 
         let public_key = UnparsedPublicKey::new(algorithm, pubkey_bytes);

@@ -1,4 +1,4 @@
-/// Sliding replay window for DTLS record sequence numbers.
+/// Sliding replay window for DTLS 1.3 record sequence numbers.
 ///
 /// Maintains the latest accepted sequence number and a 64-bit bitmap of the
 /// last 64 seen sequence numbers to reject duplicates and old records.

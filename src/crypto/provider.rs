@@ -13,13 +13,13 @@
 //!
 //! The provider system is organized into these main components:
 //!
-//! - **Cipher Suites** ([`SupportedDtls12CipherSuite`]): Factory for AEAD ciphers
+//! - **Cipher Suites** ([`SupportedDtls13CipherSuite`]): Factory for AEAD ciphers
 //! - **Key Exchange Groups** ([`SupportedKxGroup`]): Factory for ECDHE key exchanges
 //! - **Signature Verification** ([`SignatureVerifier`]): Verify signatures in certificates
 //! - **Key Provider** ([`KeyProvider`]): Parse and load private keys
 //! - **Secure Random** ([`SecureRandom`]): Cryptographically secure RNG
 //! - **Hash Provider** ([`HashProvider`]): Factory for hash contexts
-//! - **HMAC Provider** ([`HmacProvider`]): Compute HMAC signatures (also drives PRF and HKDF)
+//! - **HMAC Provider** ([`HmacProvider`]): Compute HMAC signatures (drives HKDF and cookies)
 //!
 //! # Using a Custom Provider
 //!
@@ -45,15 +45,7 @@
 //!         .unwrap()
 //! );
 //!
-//! // Or use your own custom provider
-//! // let config = Arc::new(
-//! //     Config::builder()
-//! //         .with_crypto_provider(my_custom_provider())
-//! //         .build()
-//! //         .unwrap()
-//! // );
-//!
-//! let dtls = Dtls::new_12(config, cert, Instant::now());
+//! let dtls = Dtls::new_13(config, cert, Instant::now());
 //! # }
 //! # #[cfg(not(all(feature = "aws-lc-rs", feature = "rcgen")))]
 //! # fn main() {}
@@ -67,75 +59,16 @@
 //! 2. Create static instances of your implementations
 //! 3. Build a [`CryptoProvider`] struct with references to those statics
 //!
-//! ## Example: Custom Cipher Suite
-//!
-//! ```
-//! use dimpl::CryptoError;
-//! use dimpl::crypto::{SupportedDtls12CipherSuite, Cipher, Dtls12CipherSuite, HashAlgorithm};
-//! use dimpl::crypto::{Buf, TmpBuf};
-//! use dimpl::crypto::{Aad, Nonce};
-//!
-//! #[derive(Debug)]
-//! struct MyCipher;
-//!
-//! impl MyCipher {
-//!     fn new(_key: &[u8]) -> Result<Self, CryptoError> {
-//!         Ok(Self)
-//!     }
-//! }
-//!
-//! impl Cipher for MyCipher {
-//!     fn encrypt(&mut self, _: &mut Buf, _: Aad, _: Nonce) -> Result<(), CryptoError> {
-//!         Ok(())
-//!     }
-//!     fn decrypt(&mut self, _: &mut TmpBuf, _: Aad, _: Nonce) -> Result<(), CryptoError> {
-//!         Ok(())
-//!     }
-//! }
-//!
-//! #[derive(Debug)]
-//! struct MyDtls12CipherSuite;
-//!
-//! impl SupportedDtls12CipherSuite for MyDtls12CipherSuite {
-//!     fn suite(&self) -> Dtls12CipherSuite {
-//!         Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256
-//!     }
-//!
-//!     fn hash_algorithm(&self) -> HashAlgorithm {
-//!         HashAlgorithm::SHA256
-//!     }
-//!
-//!     fn key_lengths(&self) -> (usize, usize, usize) {
-//!         (0, 16, 4) // (mac_key_len, enc_key_len, fixed_iv_len)
-//!     }
-//!
-//!     fn explicit_nonce_len(&self) -> usize {
-//!         8 // AES-GCM: 8-byte explicit nonce per record
-//!     }
-//!
-//!     fn tag_len(&self) -> usize {
-//!         16 // 128-bit authentication tag
-//!     }
-//!
-//!     fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError> {
-//!         // Create your cipher implementation here
-//!         Ok(Box::new(MyCipher::new(key)?))
-//!     }
-//! }
-//!
-//! static MY_CIPHER_SUITE: MyDtls12CipherSuite = MyDtls12CipherSuite;
-//! static ALL_CIPHER_SUITES: &[&dyn SupportedDtls12CipherSuite] = &[&MY_CIPHER_SUITE];
-//! ```
-//!
 //! # Requirements
 //!
-//! For DTLS 1.2, implementations must support:
+//! For DTLS 1.3, implementations must support:
 //!
-//! - **Cipher suites**: ECDHE_ECDSA with AES-128-GCM, AES-256-GCM, or CHACHA20_POLY1305
+//! - **Cipher suites**: TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384,
+//!   TLS_CHACHA20_POLY1305_SHA256
 //! - **Key exchange**: ECDHE with X25519, P-256, or P-384 curves
 //! - **Signatures**: ECDSA with P-256/SHA-256 or P-384/SHA-384
 //! - **Hash**: SHA-256 and SHA-384
-//! - **HMAC**: HMAC-SHA256 and HMAC-SHA384 (used for PRF, HKDF, and cookies)
+//! - **HMAC**: HMAC-SHA256 and HMAC-SHA384 (drives HKDF and cookie computation)
 //!
 //! # Thread Safety
 //!
@@ -148,7 +81,6 @@ use std::sync::OnceLock;
 
 use crate::buffer::{Buf, TmpBuf};
 use crate::crypto::{Aad, Nonce};
-use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
 use crate::{CertificateError, CryptoError};
 
@@ -247,40 +179,7 @@ pub trait ActiveKeyExchange: CryptoSafe {
 // Factory Traits (Level 1 - used by CryptoProvider)
 // ============================================================================
 
-/// Cipher suite support (factory for Cipher instances).
-pub trait SupportedDtls12CipherSuite: CryptoSafe {
-    /// The cipher suite this supports.
-    fn suite(&self) -> Dtls12CipherSuite;
-
-    /// Hash algorithm used by this suite.
-    fn hash_algorithm(&self) -> HashAlgorithm;
-
-    /// Key material lengths: (mac_key_len, enc_key_len, fixed_iv_len).
-    fn key_lengths(&self) -> (usize, usize, usize);
-
-    /// Length in bytes of the per-record explicit nonce (carried in the record body).
-    ///
-    /// AES-GCM suites carry an 8-byte explicit nonce; ChaCha20-Poly1305 carries none.
-    fn explicit_nonce_len(&self) -> usize;
-
-    /// AEAD authentication tag length in bytes.
-    fn tag_len(&self) -> usize;
-
-    /// Minimum length, in bytes, of a protected record's encrypted fragment.
-    ///
-    /// For AEAD suites this equals explicit nonce + authentication tag; a CBC
-    /// suite would override this to `IV + MAC + 1` (one padding byte). Records
-    /// shorter than this cannot be valid regardless of cipher mode and are
-    /// rejected at the record boundary.
-    fn min_protected_fragment_len(&self) -> usize {
-        self.explicit_nonce_len() + self.tag_len()
-    }
-
-    /// Create a cipher instance with the given key.
-    fn create_cipher(&self, key: &[u8]) -> Result<Box<dyn Cipher>, CryptoError>;
-}
-
-/// Key exchange group support (factory for ActiveKeyExchange).
+/// Key exchange group support (factory for [`ActiveKeyExchange`]).
 pub trait SupportedKxGroup: CryptoSafe {
     /// Named group for this key exchange group.
     fn name(&self) -> NamedGroup;
@@ -303,64 +202,9 @@ pub trait SignatureVerifier: CryptoSafe {
     ) -> Result<(), CryptoError>;
 }
 
-/// Allow-list of supported (signature, hash, curve) combinations for
-/// DTLS 1.2 signature verification.
-///
-/// In DTLS 1.2 the hash algorithm and the certificate's curve are
-/// independent choices, so all cross-combinations are valid.
-///
-///  Signature | Hash    | Curve
-/// -----------+---------+-----------
-///  ECDSA     | SHA-256 | P-256
-///  ECDSA     | SHA-256 | P-384
-///  ECDSA     | SHA-384 | P-256
-///  ECDSA     | SHA-384 | P-384
-const SUPPORTED_VERIFY_SCHEMES: &[(SignatureAlgorithm, HashAlgorithm, NamedGroup)] = &[
-    (
-        SignatureAlgorithm::ECDSA,
-        HashAlgorithm::SHA256,
-        NamedGroup::Secp256r1,
-    ),
-    (
-        SignatureAlgorithm::ECDSA,
-        HashAlgorithm::SHA256,
-        NamedGroup::Secp384r1,
-    ),
-    (
-        SignatureAlgorithm::ECDSA,
-        HashAlgorithm::SHA384,
-        NamedGroup::Secp256r1,
-    ),
-    (
-        SignatureAlgorithm::ECDSA,
-        HashAlgorithm::SHA384,
-        NamedGroup::Secp384r1,
-    ),
-];
-
-/// Check that a (signature, hash, curve) combination is in the allow-list.
-pub fn check_verify_scheme(
-    sig_alg: SignatureAlgorithm,
-    hash_alg: HashAlgorithm,
-    group: NamedGroup,
-) -> Result<(), CryptoError> {
-    if SUPPORTED_VERIFY_SCHEMES
-        .iter()
-        .any(|(s, h, g)| *s == sig_alg && *h == hash_alg && *g == group)
-    {
-        Ok(())
-    } else {
-        Err(CryptoError::UnsupportedSignatureVerification {
-            signature: sig_alg,
-            hash: hash_alg,
-            group,
-        })
-    }
-}
-
 /// Extract the EC curve ([`NamedGroup`]) from a DER-encoded X.509 certificate.
 ///
-/// Used by DTLS 1.3 to verify that the [`SignatureScheme`](crate::types::SignatureScheme)
+/// Used to verify that the [`SignatureScheme`](crate::types::SignatureScheme)
 /// in `CertificateVerify` is consistent with the peer's certificate key.
 #[cfg(feature = "_crypto-common")]
 pub fn cert_named_group(cert_der: &[u8]) -> Result<NamedGroup, CertificateError> {
@@ -386,7 +230,7 @@ pub fn cert_named_group(cert_der: &[u8]) -> Result<NamedGroup, CertificateError>
     }
 }
 
-/// Private key parser (factory for SigningKey).
+/// Private key parser (factory for [`SigningKey`]).
 pub trait KeyProvider: CryptoSafe {
     /// Parse and load a private key from DER/PEM bytes.
     fn load_private_key(&self, key_der: &[u8]) -> Result<Box<dyn SigningKey>, CryptoError>;
@@ -398,7 +242,7 @@ pub trait SecureRandom: CryptoSafe {
     fn fill(&self, buf: &mut [u8]) -> Result<(), CryptoError>;
 }
 
-/// Hash provider (factory for HashContext).
+/// Hash provider (factory for [`HashContext`]).
 pub trait HashProvider: CryptoSafe {
     /// Create a new hash context for the specified algorithm.
     fn create_hash(&self, algorithm: HashAlgorithm) -> Box<dyn HashContext>;
@@ -426,13 +270,13 @@ pub trait HmacProvider: CryptoSafe {
 }
 
 // ============================================================================
-// DTLS 1.3 Factory Traits
+// DTLS 1.3 Cipher Suite Trait
 // ============================================================================
 
-/// Cipher suite support for DTLS 1.3 (factory for Cipher instances).
+/// Cipher suite support for DTLS 1.3 (factory for [`Cipher`] instances).
 ///
-/// Unlike DTLS 1.2 cipher suites, TLS 1.3 cipher suites only specify the
-/// AEAD algorithm and hash function. Key exchange is negotiated separately.
+/// TLS 1.3 cipher suites only specify the AEAD algorithm and hash function.
+/// Key exchange is negotiated separately via the `key_share` extension.
 pub trait SupportedDtls13CipherSuite: CryptoSafe {
     /// The cipher suite this supports.
     fn suite(&self) -> Dtls13CipherSuite;
@@ -477,18 +321,11 @@ pub trait SupportedDtls13CipherSuite: CryptoSafe {
 // Core Provider Struct
 // ============================================================================
 
-/// Cryptographic provider for DTLS operations.
+/// Cryptographic provider for DTLS 1.3 operations.
 ///
 /// This struct holds references to all cryptographic components needed
-/// for DTLS. Users can provide custom implementations of each component
+/// for DTLS 1.3. Users can provide custom implementations of each component
 /// to replace the default aws-lc-rs-based provider.
-///
-/// # Version-Specific Components
-///
-/// Shared components like `kx_groups`, `signature_verification`, `key_provider`,
-/// `secure_random`, `hash_provider`, and `hmac_provider` are used by both versions.
-/// PRF (TLS 1.2) and HKDF (TLS 1.3) key derivation are built generically on top
-/// of `hmac_provider` — see the [`prf_hkdf`](super::prf_hkdf) module.
 ///
 /// # Design
 ///
@@ -508,16 +345,12 @@ pub trait SupportedDtls13CipherSuite: CryptoSafe {
 ///
 /// // Or build a custom one (using defaults for demonstration)
 /// let custom_provider = CryptoProvider {
-///     // Shared components
 ///     kx_groups: provider.kx_groups,
 ///     signature_verification: provider.signature_verification,
 ///     key_provider: provider.key_provider,
 ///     secure_random: provider.secure_random,
 ///     hash_provider: provider.hash_provider,
 ///     hmac_provider: provider.hmac_provider,
-///     // DTLS 1.2 components
-///     cipher_suites: provider.cipher_suites,
-///     // DTLS 1.3 components
 ///     dtls13_cipher_suites: provider.dtls13_cipher_suites,
 /// };
 /// # }
@@ -526,12 +359,7 @@ pub trait SupportedDtls13CipherSuite: CryptoSafe {
 /// ```
 #[derive(Debug, Clone)]
 pub struct CryptoProvider {
-    // =========================================================================
-    // Shared components (used by both DTLS 1.2 and DTLS 1.3)
-    // =========================================================================
     /// Supported key exchange groups (P-256, P-384, X25519).
-    ///
-    /// Used for ECDHE key exchange in both DTLS versions.
     pub kx_groups: &'static [&'static dyn SupportedKxGroup],
 
     /// Signature verification for certificates.
@@ -546,21 +374,9 @@ pub struct CryptoProvider {
     /// Hash provider for handshake hashing.
     pub hash_provider: &'static dyn HashProvider,
 
-    /// HMAC provider for computing HMAC signatures.
+    /// HMAC provider for computing HMAC signatures (drives HKDF and cookies).
     pub hmac_provider: &'static dyn HmacProvider,
 
-    // =========================================================================
-    // DTLS 1.2 specific components
-    // =========================================================================
-    /// Supported DTLS 1.2 cipher suites (for negotiation).
-    ///
-    /// These cipher suites bundle key exchange, authentication, encryption,
-    /// and MAC algorithms together (e.g., TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256).
-    pub cipher_suites: &'static [&'static dyn SupportedDtls12CipherSuite],
-
-    // =========================================================================
-    // DTLS 1.3 specific components
-    // =========================================================================
     /// Supported DTLS 1.3 cipher suites (for negotiation).
     ///
     /// TLS 1.3 cipher suites only specify the AEAD and hash algorithms

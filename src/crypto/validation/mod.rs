@@ -5,7 +5,7 @@
 
 use arrayvec::ArrayVec;
 
-use super::{Aad, CryptoProvider, Nonce, SupportedDtls12CipherSuite, SupportedKxGroup};
+use super::{Aad, CryptoProvider, Nonce, SupportedKxGroup};
 use crate::buffer::{Buf, TmpBuf};
 use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
 use crate::{ConfigError, CryptoProviderValidationError, Error};
@@ -15,21 +15,6 @@ fn provider_error(error: CryptoProviderValidationError) -> Error {
 }
 
 impl CryptoProvider {
-    /// Returns an iterator over validated cipher suites supported by dimpl.
-    ///
-    /// Only cipher suites documented in lib.rs are returned:
-    /// - `TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256`
-    /// - `TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384`
-    /// - `TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256`
-    pub fn supported_cipher_suites(
-        &self,
-    ) -> impl Iterator<Item = &'static dyn SupportedDtls12CipherSuite> {
-        self.cipher_suites
-            .iter()
-            .copied()
-            .filter(|cs| cs.suite().is_supported())
-    }
-
     /// Returns an iterator over validated key exchange groups supported by dimpl.
     ///
     /// Only key exchange groups documented in lib.rs are returned:
@@ -45,86 +30,54 @@ impl CryptoProvider {
         })
     }
 
-    ///
-    /// Combines provider filtering with signature algorithm compatibility.
-    pub fn supported_cipher_suites_for_signature_algorithm(
-        &self,
-        sig_alg: SignatureAlgorithm,
-    ) -> impl Iterator<Item = &'static dyn SupportedDtls12CipherSuite> {
-        self.supported_cipher_suites()
-            .filter(move |cs| cs.suite().signature_algorithm() == Some(sig_alg))
-    }
-
-    /// Check if provider supports ECDH-based cipher suites.
-    ///
-    /// Returns true if any supported cipher suite uses ECDH key exchange.
-    pub fn has_ecdh(&self) -> bool {
-        self.supported_cipher_suites()
-            .any(|cs| cs.suite().has_ecc())
-    }
-
     /// Validates the provider configuration for use with dimpl.
     ///
     /// This ensures the provider meets dimpl's requirements:
-    /// - At least one supported cipher suite
-    /// - ECDH cipher suites have matching key exchange groups
-    /// - Hash providers support required algorithms
-    /// - HMAC provider supports required operations
+    /// - At least one DTLS 1.3 cipher suite is configured
+    /// - The hash provider works for each suite's hash algorithm
+    /// - The HMAC provider supports HMAC-SHA256 (used for cookies and HKDF)
+    /// - HKDF works for each suite's hash algorithm
+    /// - AEAD encrypt/decrypt works for each suite
+    /// - Record number encryption (`encrypt_sn`) works for each suite
+    /// - Key exchange round-trip works for each supported group
     ///
     /// Returns `Error::ConfigError` if validation fails.
     pub fn validate(&self) -> Result<(), Error> {
-        self.validate_cipher_suites()?;
-        self.validate_kx_groups()?;
-        let validated_hashes = self.validate_hash_providers()?;
-        self.validate_prf(&validated_hashes)?;
-        self.validate_signature_verifier(&validated_hashes)?;
-        self.validate_hmac_provider()?;
         self.validate_dtls13_cipher_suites()?;
+        self.validate_hash_providers()?;
+        self.validate_hmac_provider()?;
+        self.validate_dtls13_hkdf()?;
         self.validate_dtls13_aead()?;
         self.validate_dtls13_encrypt_sn()?;
         self.validate_kx_exchange()?;
         Ok(())
     }
 
-    /// Validate that at least one cipher suite is supported.
-    fn validate_cipher_suites(&self) -> Result<(), Error> {
-        let cipher_count = self.supported_cipher_suites().count();
-        if cipher_count == 0 {
+    /// Validate that at least one DTLS 1.3 cipher suite is configured.
+    fn validate_dtls13_cipher_suites(&self) -> Result<(), Error> {
+        if self.dtls13_cipher_suites.is_empty() {
             return Err(provider_error(
-                CryptoProviderValidationError::NoCipherSuites,
+                CryptoProviderValidationError::NoDtls13CipherSuites,
             ));
         }
         Ok(())
     }
 
-    /// Validate that ECDH cipher suites have matching key exchange groups.
-    fn validate_kx_groups(&self) -> Result<(), Error> {
-        if self.has_ecdh() {
-            let kx_count = self.supported_kx_groups().count();
-            if kx_count == 0 {
-                return Err(provider_error(
-                    CryptoProviderValidationError::EcdhCipherSuitesWithoutKeyExchangeGroups,
-                ));
+    /// Validate that the hash provider supports every hash algorithm used by
+    /// the configured DTLS 1.3 cipher suites.
+    fn validate_hash_providers(&self) -> Result<(), Error> {
+        // Deduplicate by hash algorithm; the same SHA-256 is reused across suites.
+        let mut required: Vec<HashAlgorithm> = Vec::new();
+        for cs in self.dtls13_cipher_suites {
+            let hash_alg = cs.suite().hash_algorithm();
+            if !required.contains(&hash_alg) {
+                required.push(hash_alg);
             }
         }
-        Ok(())
-    }
 
-    /// Validate that hash providers support required algorithms.
-    /// Returns the list of validated hash algorithms.
-    fn validate_hash_providers(&self) -> Result<Vec<HashAlgorithm>, Error> {
-        // Collect unique hash algorithms from supported cipher suites
-        let required_hashes: Vec<HashAlgorithm> = self
-            .cipher_suites
-            .iter()
-            .map(|cs| cs.suite().hash_algorithm())
-            .collect();
-
-        // Test each required hash algorithm with known test vectors
-        for hash_alg in &required_hashes {
+        for hash_alg in &required {
             let mut hasher = self.hash_provider.create_hash(*hash_alg);
 
-            // Test with empty input - use known hash values
             hasher.update(&[]);
             let mut result = Buf::new();
             hasher.clone_and_finalize(&mut result);
@@ -147,116 +100,31 @@ impl CryptoProvider {
             }
         }
 
-        Ok(required_hashes)
+        Ok(())
     }
 
-    /// Validate that PRF (via HMAC) works for every supported hash algorithm.
-    fn validate_prf(&self, validated_hashes: &[HashAlgorithm]) -> Result<(), Error> {
-        let secret = b"test_secret";
-        let label = "test label";
-        let seed = b"test_seed";
-        let output_len = 32;
+    /// Validate that HMAC provider supports required operations.
+    ///
+    /// We require HMAC-SHA256 for DTLS cookie computation and HKDF.
+    fn validate_hmac_provider(&self) -> Result<(), Error> {
+        // HMAC-SHA256(key="key", data="The quick brown fox jumps over the lazy dog")
+        let key = b"key";
+        let data = b"The quick brown fox jumps over the lazy dog";
 
-        for &hash_alg in validated_hashes {
-            let mut result = Buf::new();
-            let mut scratch = Buf::new();
-            super::prf_hkdf::prf_tls12(
-                self.hmac_provider,
-                secret,
-                label,
-                seed,
-                &mut result,
-                output_len,
-                &mut scratch,
-                hash_alg,
-            )
-            .map_err(|e| {
-                provider_error(CryptoProviderValidationError::PrfFailed {
-                    hash: hash_alg,
-                    source: e,
-                })
-            })?;
+        let result = self
+            .hmac_provider
+            .hmac_sha256(key, data)
+            .map_err(|e| provider_error(CryptoProviderValidationError::HmacFailed(e)))?;
 
-            let maybe_expected = PRF_TEST_VECTORS
-                .iter()
-                .find(|(h, _)| *h == hash_alg)
-                .map(|(_, v)| v);
-
-            let Some(expected) = maybe_expected else {
-                return Err(provider_error(
-                    CryptoProviderValidationError::MissingPrfTestVector(hash_alg),
-                ));
-            };
-
-            if result.as_ref() != *expected {
-                return Err(provider_error(CryptoProviderValidationError::PrfIncorrect(
-                    hash_alg,
-                )));
-            }
+        if result.as_slice() != HMAC_SHA256_TEST_VECTOR {
+            return Err(provider_error(CryptoProviderValidationError::HmacIncorrect));
         }
 
         Ok(())
     }
 
-    /// Validate that signature verifier works for every supported cipher suite.
-    fn validate_signature_verifier(
-        &self,
-        _validated_hashes: &[HashAlgorithm],
-    ) -> Result<(), Error> {
-        // Test signature verification for each supported cipher suite
-        for cs in self.supported_cipher_suites() {
-            let hash_alg = cs.suite().hash_algorithm();
-            let sig_alg = match cs.suite().signature_algorithm() {
-                Some(alg) => alg,
-                // PSK suites have no signature — skip validation
-                None => continue,
-            };
-
-            let (cert_der, signature, test_data) = match (hash_alg, sig_alg) {
-                (HashAlgorithm::SHA256, SignatureAlgorithm::ECDSA) => (
-                    VALIDATION_P256_CERT,
-                    VALIDATION_P256_SHA256_SIG,
-                    VALIDATION_TEST_DATA,
-                ),
-                (HashAlgorithm::SHA384, SignatureAlgorithm::ECDSA) => (
-                    VALIDATION_P384_CERT,
-                    VALIDATION_P384_SHA384_SIG,
-                    VALIDATION_TEST_DATA,
-                ),
-                _ => {
-                    return Err(provider_error(
-                        CryptoProviderValidationError::NoSignatureValidationVector {
-                            hash: hash_alg,
-                            signature: sig_alg,
-                        },
-                    ));
-                }
-            };
-
-            // Verify the signature
-            self.signature_verification
-                .verify_signature(cert_der, test_data, signature, hash_alg, sig_alg)
-                .map_err(|e| {
-                    provider_error(CryptoProviderValidationError::SignatureVerificationFailed {
-                        hash: hash_alg,
-                        signature: sig_alg,
-                        source: e,
-                    })
-                })?;
-        }
-
-        Ok(())
-    }
-
-    /// Validate that DTLS 1.3 cipher suites and HKDF provider are configured.
-    fn validate_dtls13_cipher_suites(&self) -> Result<(), Error> {
-        if self.dtls13_cipher_suites.is_empty() {
-            return Err(provider_error(
-                CryptoProviderValidationError::NoDtls13CipherSuites,
-            ));
-        }
-
-        // Verify HKDF (via HMAC) works for each DTLS 1.3 cipher suite's hash algorithm
+    /// Validate that HKDF (via HMAC) works for each DTLS 1.3 cipher suite's hash algorithm.
+    fn validate_dtls13_hkdf(&self) -> Result<(), Error> {
         for cs in self.dtls13_cipher_suites {
             let hash = cs.suite().hash_algorithm();
             let hash_len = hash.output_len();
@@ -276,7 +144,6 @@ impl CryptoProvider {
                 ));
             }
         }
-
         Ok(())
     }
 
@@ -404,29 +271,11 @@ impl CryptoProvider {
         }
         Ok(())
     }
-
-    /// Validate that HMAC provider supports required operations.
-    ///
-    /// We require HMAC-SHA256 for DTLS cookie computation.
-    fn validate_hmac_provider(&self) -> Result<(), Error> {
-        // Test HMAC-SHA256 with known test vector (RFC 2104 test case)
-        // HMAC-SHA256(key="key", data="The quick brown fox jumps over the lazy dog")
-        let key = b"key";
-        let data = b"The quick brown fox jumps over the lazy dog";
-
-        let result = self
-            .hmac_provider
-            .hmac_sha256(key, data)
-            .map_err(|e| provider_error(CryptoProviderValidationError::HmacFailed(e)))?;
-
-        // Verify against known HMAC-SHA256 test vector
-        if result.as_slice() != HMAC_SHA256_TEST_VECTOR {
-            return Err(provider_error(CryptoProviderValidationError::HmacIncorrect));
-        }
-
-        Ok(())
-    }
 }
+
+// =============================================================================
+// Test vectors
+// =============================================================================
 
 const HASH_TEST_VECTORS: &[(HashAlgorithm, &[u8])] = &[
     (
@@ -448,41 +297,12 @@ const HASH_TEST_VECTORS: &[(HashAlgorithm, &[u8])] = &[
     ),
 ];
 
-// Test vectors for TLS 1.2 PRF
-// Generated using: PRF(secret="test_secret", label="test label", seed="test_seed", output_len=32)
-const PRF_TEST_VECTORS: &[(HashAlgorithm, &[u8])] = &[
-    (
-        HashAlgorithm::SHA256,
-        &[
-            0xc7, 0x49, 0xce, 0xdf, 0xad, 0xaf, 0x3d, 0xf1, 0x18, 0x2c, 0xa2, 0x25, 0xab, 0xe9,
-            0x4e, 0x0c, 0x19, 0xc3, 0x81, 0x49, 0x57, 0xbd, 0xdc, 0x28, 0x55, 0x78, 0x73, 0xdb,
-            0xb7, 0x9f, 0xce, 0x29,
-        ],
-    ),
-    (
-        HashAlgorithm::SHA384,
-        &[
-            0x74, 0x9a, 0xf3, 0x03, 0x23, 0x9e, 0x3f, 0x65, 0x4e, 0x9a, 0xd1, 0xb1, 0xd1, 0x22,
-            0x31, 0x02, 0x1a, 0xd2, 0x17, 0x26, 0x04, 0x75, 0x21, 0xf4, 0x66, 0xad, 0xcd, 0x37,
-            0x2b, 0xe4, 0x7e, 0x8b,
-        ],
-    ),
-];
-
 // Test vector for HMAC-SHA256
 // HMAC-SHA256(key="key", data="The quick brown fox jumps over the lazy dog")
-// Computed using standard HMAC-SHA256 implementation
 const HMAC_SHA256_TEST_VECTOR: &[u8] = &[
     0xf7, 0xbc, 0x83, 0xf4, 0x30, 0x53, 0x84, 0x24, 0xb1, 0x32, 0x98, 0xe6, 0xaa, 0x6f, 0xb1, 0x43,
     0xef, 0x4d, 0x59, 0xa1, 0x49, 0x46, 0x17, 0x59, 0x97, 0x47, 0x9d, 0xbc, 0x2d, 0x1a, 0x3c, 0xd8,
 ];
-
-// Test certificates and signatures for signature verification validation
-const VALIDATION_TEST_DATA: &[u8] = include_bytes!("test_data.bin");
-const VALIDATION_P256_CERT: &[u8] = include_bytes!("p256_cert.der");
-const VALIDATION_P256_SHA256_SIG: &[u8] = include_bytes!("p256_sha256_sig.der");
-const VALIDATION_P384_CERT: &[u8] = include_bytes!("p384_cert.der");
-const VALIDATION_P384_SHA384_SIG: &[u8] = include_bytes!("p384_sha384_sig.der");
 
 // AEAD test vectors for DTLS 1.3 cipher suites
 struct AeadTestVector {
@@ -562,8 +382,6 @@ const AEAD_TEST_VECTORS: &[AeadTestVector] = &[
             0x07, 0x00, 0x00, 0x00, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
         ],
         plaintext: &[
-            // "Ladies and Gentlemen of the class of '99: If I could offer you
-            //  only one tip for the future, sunscreen would be it."
             0x4c, 0x61, 0x64, 0x69, 0x65, 0x73, 0x20, 0x61, 0x6e, 0x64, 0x20, 0x47, 0x65, 0x6e,
             0x74, 0x6c, 0x65, 0x6d, 0x65, 0x6e, 0x20, 0x6f, 0x66, 0x20, 0x74, 0x68, 0x65, 0x20,
             0x63, 0x6c, 0x61, 0x73, 0x73, 0x20, 0x6f, 0x66, 0x20, 0x27, 0x39, 0x39, 0x3a, 0x20,
@@ -665,7 +483,6 @@ const SN_TEST_VECTORS: &[SnTestVector] = &[
 mod tests_aws_lc_rs {
     use super::*;
     use crate::crypto::aws_lc_rs;
-    use crate::dtls12::message::Dtls12CipherSuite;
 
     #[test]
     fn test_default_provider_validates() {
@@ -674,12 +491,11 @@ mod tests_aws_lc_rs {
     }
 
     #[test]
-    fn test_default_provider_has_cipher_suites() {
+    fn test_default_provider_has_dtls13_cipher_suites() {
         let provider = aws_lc_rs::default_provider();
-        let count = provider.supported_cipher_suites().count();
-        // ECDHE: AES-128, AES-256, ChaCha20
-        // PSK: CCM-8
-        assert_eq!(count, 4);
+        let count = provider.dtls13_cipher_suites.len();
+        // AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305
+        assert_eq!(count, 3);
     }
 
     #[test]
@@ -687,26 +503,6 @@ mod tests_aws_lc_rs {
         let provider = aws_lc_rs::default_provider();
         let count = provider.supported_kx_groups().count();
         assert_eq!(count, 3); // X25519, P-256, and P-384
-    }
-
-    #[test]
-    fn test_default_provider_has_ecdh() {
-        let provider = aws_lc_rs::default_provider();
-        assert!(provider.has_ecdh());
-    }
-
-    #[test]
-    fn test_supported_cipher_suites_for_signature_algorithm() {
-        let provider = aws_lc_rs::default_provider();
-        let ecdsa_suites: Vec<_> = provider
-            .supported_cipher_suites_for_signature_algorithm(SignatureAlgorithm::ECDSA)
-            .map(|cs| cs.suite())
-            .collect();
-
-        assert_eq!(ecdsa_suites.len(), 3);
-        assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256));
-        assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384));
-        assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256));
     }
 }
 
@@ -715,7 +511,6 @@ mod tests_aws_lc_rs {
 mod tests_rust_crypto {
     use super::*;
     use crate::crypto::rust_crypto;
-    use crate::dtls12::message::Dtls12CipherSuite;
 
     #[test]
     fn test_default_provider_validates() {
@@ -724,12 +519,10 @@ mod tests_rust_crypto {
     }
 
     #[test]
-    fn test_default_provider_has_cipher_suites() {
+    fn test_default_provider_has_dtls13_cipher_suites() {
         let provider = rust_crypto::default_provider();
-        let count = provider.supported_cipher_suites().count();
-        // ECDHE: AES-128, AES-256, ChaCha20
-        // PSK: CCM-8
-        assert_eq!(count, 4);
+        let count = provider.dtls13_cipher_suites.len();
+        assert_eq!(count, 3);
     }
 
     #[test]
@@ -737,25 +530,5 @@ mod tests_rust_crypto {
         let provider = rust_crypto::default_provider();
         let count = provider.supported_kx_groups().count();
         assert_eq!(count, 3); // X25519, P-256, and P-384
-    }
-
-    #[test]
-    fn test_default_provider_has_ecdh() {
-        let provider = rust_crypto::default_provider();
-        assert!(provider.has_ecdh());
-    }
-
-    #[test]
-    fn test_supported_cipher_suites_for_signature_algorithm() {
-        let provider = rust_crypto::default_provider();
-        let ecdsa_suites: Vec<_> = provider
-            .supported_cipher_suites_for_signature_algorithm(SignatureAlgorithm::ECDSA)
-            .map(|cs| cs.suite())
-            .collect();
-
-        assert_eq!(ecdsa_suites.len(), 3);
-        assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_AES128_GCM_SHA256));
-        assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_AES256_GCM_SHA384));
-        assert!(ecdsa_suites.contains(&Dtls12CipherSuite::ECDHE_ECDSA_CHACHA20_POLY1305_SHA256));
     }
 }

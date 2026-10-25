@@ -57,12 +57,12 @@
 //! # fn main() {}
 //! ```
 
-mod cipher_suite;
 mod hash;
 pub(crate) mod hmac;
 mod kx_group;
 mod random;
 mod sign;
+mod cipher_suite;
 
 use super::CryptoProvider;
 
@@ -112,8 +112,6 @@ pub fn default_provider() -> CryptoProvider {
         secure_random: &random::SECURE_RANDOM,
         hash_provider: &hash::HASH_PROVIDER,
         hmac_provider: &hmac::HMAC_PROVIDER,
-        // DTLS 1.2 components
-        cipher_suites: cipher_suite::ALL_CIPHER_SUITES,
         // DTLS 1.3 components
         dtls13_cipher_suites: cipher_suite::ALL_DTLS13_CIPHER_SUITES,
     }

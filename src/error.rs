@@ -2,7 +2,6 @@
 
 use std::fmt;
 
-use crate::dtls12::message::Dtls12CipherSuite;
 use crate::types::CompressionMethod;
 use crate::types::Dtls13CipherSuite;
 use crate::types::HashAlgorithm;
@@ -14,6 +13,7 @@ use crate::types::SignatureScheme;
 pub(crate) fn bounded_error_len(len: usize) -> u16 {
     len.min(u16::MAX as usize) as u16
 }
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -155,7 +155,6 @@ pub enum CryptoError {
     /// The requested ECDHE group is unsupported.
     UnsupportedEcdheNamedGroup(NamedGroup),
     /// The requested DTLS 1.2 cipher suite is unsupported.
-    UnsupportedCipherSuite(Dtls12CipherSuite),
     /// The requested HMAC hash algorithm is unsupported.
     UnsupportedHmacHash(HashAlgorithm),
     /// The requested signature algorithm is unsupported.
@@ -290,14 +289,6 @@ pub enum CryptoError {
         is_client: bool,
     },
     /// The DTLS 1.2 record IV length is unsupported for the selected suite.
-    UnsupportedDtls12RecordIvLen {
-        /// The unsupported record IV length.
-        ///
-        /// Values greater than `u16::MAX` are reported as `u16::MAX`.
-        len: u16,
-        /// The selected DTLS 1.2 cipher suite.
-        suite: Dtls12CipherSuite,
-    },
     /// No private key is configured.
     NoPrivateKeyConfigured,
     /// A PSK operation was requested before a PSK was set.
@@ -431,9 +422,7 @@ pub enum SecurityError {
     /// The server selected a cipher suite that was not offered or recognized.
     ServerSelectedUnknownCipherSuite,
     /// The server selected a DTLS 1.2 cipher suite incompatible with local mode.
-    ServerSelectedIncompatibleCipherSuite(Dtls12CipherSuite),
     /// The server selected a DTLS 1.2 cipher suite disallowed by configuration.
-    ServerSelectedDisallowedCipherSuite(Dtls12CipherSuite),
     /// The server selected a DTLS 1.3 cipher suite disallowed by configuration.
     ServerSelectedDisallowedDtls13CipherSuite(Dtls13CipherSuite),
     /// DTLS 1.2 extended master secret was required but not negotiated.
@@ -902,9 +891,6 @@ impl fmt::Display for CryptoError {
             Self::UnsupportedEcdheNamedGroup(group) => {
                 write!(f, "unsupported ECDHE named group: {group:?}")
             }
-            Self::UnsupportedCipherSuite(suite) => {
-                write!(f, "unsupported cipher suite: {suite:?}")
-            }
             Self::UnsupportedHmacHash(hash) => {
                 write!(f, "unsupported HMAC hash algorithm: {hash:?}")
             }
@@ -998,9 +984,6 @@ impl fmt::Display for CryptoError {
             Self::WriteIvNotAvailable { is_client } => {
                 let side = if *is_client { "client" } else { "server" };
                 write!(f, "{side} write IV not available")
-            }
-            Self::UnsupportedDtls12RecordIvLen { len, suite } => {
-                write!(f, "unsupported DTLS 1.2 record_iv_len={len} for {suite:?}")
             }
             Self::NoPrivateKeyConfigured => write!(f, "no private key configured"),
             Self::PskNotSet => write!(f, "PSK not set"),
@@ -1118,12 +1101,6 @@ impl fmt::Display for SecurityError {
             }
             Self::ServerSelectedUnknownCipherSuite => {
                 write!(f, "server selected unknown cipher suite")
-            }
-            Self::ServerSelectedIncompatibleCipherSuite(suite) => {
-                write!(f, "server selected incompatible cipher suite: {suite:?}")
-            }
-            Self::ServerSelectedDisallowedCipherSuite(suite) => {
-                write!(f, "server selected disallowed cipher suite: {suite:?}")
             }
             Self::ServerSelectedDisallowedDtls13CipherSuite(suite) => {
                 write!(f, "server selected disallowed cipher suite: {suite:?}")
