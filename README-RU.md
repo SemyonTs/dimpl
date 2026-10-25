@@ -1,0 +1,237 @@
+# dimpl13
+
+**dimpl13** — это отдельное ответвление [dimpl](https://github.com/algesten/dimpl), нацеленное на
+создание достаточно производительного и удобного middleware для **DTLS 1.3**
+поверх UDP/RTC. Это Sans‑IO state machine, которую вы встраиваете в свой
+event loop: подаёте входящие датаграммы, опрашиваете исходящие записи и
+таймеры, самостоятельно подключаете валидацию сертификатов и экспорт
+SRTP‑ключей.
+
+Крейт следует пути развития апстримного dimpl и повторяет его дизайн,
+структуру модулей и большую часть публичного API. Отличия:
+
+- **Только DTLS 1.3.** Поддержки DTLS 1.0 и DTLS 1.2 в этом форке нет.
+  Ни кода, ни API, ни документации про 1.2 здесь не осталось.
+- **Фокус на производительности.** Убран ряд не нужных для 1.3 абстракций
+  (PSK, PRF‑TLS‑1.2, auto‑sense), уменьшены аллокации на горячем пути
+  (`ParsedRecord` не таскает inline‑буфер handshake‑фрагментов на каждый
+  app‑data пакет), добавлены транзиентные пути для queue‑full ошибок.
+- **Небольшие изменения интерфейсов.** Некоторые сигнатуры отличаются от
+  апстрима там, где это оправдано задачей «удобный middleware» —
+  например, `Dtls::send_application_data` возвращает `Ok(0)`, когда
+  transmit‑queue переполнена, чтобы вызывающий код мог ретраить без
+  потери данных.
+
+Если вам нужен DTLS 1.2 или auto‑sense (обнаружение версии по первому
+ClientHello) — используйте оригинальный [dimpl](https://github.com/algesten/dimpl).
+
+## Goals
+- **DTLS 1.3**: реализует handshake и record layer в объёме, необходимом
+  для WebRTC.
+- **Safety**: `forbid(unsafe_code)` во всём крейте.
+- **Minimal Rust‑only deps**: только небольшие, хорошо поддерживаемые
+  Rust‑крейты для криптографии.
+- **Low overhead**: плотный контроль над аллокациями и буферами;
+  Sans‑IO интеграция.
+- **Predictable retries**: переполнение очередей на горячем пути не
+  роняет соединение — приложение получает сигнал «повтори позже».
+
+### Non‑goals
+- **DTLS 1.0 / DTLS 1.2** (используйте [dimpl](https://github.com/algesten/dimpl) для DTLS 1.2)
+- **Async**: крейт Sans‑IO и не привязан к конкретному event loop.
+- **no_std** (наверное в принципе)
+- **RSA**
+- **DHE**
+- **PSK** — в DTLS 1.3 PSK‑путь в апстримном dimpl реализован не был;
+  форк сохраняет это состояние.
+- **Auto‑sense версии** — не имеет смысла, когда 1.3 единственная версия.
+
+## Cryptography surface
+- **Cipher suites (TLS 1.3 over DTLS)**
+  - `TLS_AES_128_GCM_SHA256`
+  - `TLS_AES_256_GCM_SHA384`
+  - `TLS_CHACHA20_POLY1305_SHA256`
+- **AEAD**: AES‑GCM 128/256, ChaCha20‑Poly1305 (без CBC/EtM).
+- **Key exchange**: ECDHE (P‑256 / P‑384), X25519.
+- **Signatures**: ECDSA P‑256/SHA‑256, ECDSA P‑384/SHA‑384.
+- **DTLS‑SRTP**: экспортирует keying material для
+  `SRTP_AEAD_AES_256_GCM`, `SRTP_AEAD_AES_128_GCM` и
+  `SRTP_AES128_CM_SHA1_80` ([RFC 5764], [RFC 7714]).
+
+### Certificate model
+Во время handshake движок выдаёт [`Output::PeerCert`][peer_cert] с
+leaf‑сертификатом пира (DER). Крейт использует сертификат для проверки
+подписи DTLS handshake‑сообщений, но не выполняет PKI‑валидацию.
+Приложение само валидирует сертификат по своей политике (fingerprint,
+построение цепочки, проверки name/EKU, pinning и т. п.).
+
+### Sans‑IO integration model
+Использование движка — три вызова:
+- [`Dtls::handle_packet`][handle_packet] — подать целую принятую
+  UDP‑датаграмму.
+- [`Dtls::poll_output`][poll_output] — вытянуть исходящие
+  DTLS‑записи, таймеры, события.
+- [`Dtls::handle_timeout`][handle_timeout] — продвинуть
+  ретрансмиссии / time‑based progress.
+
+`Output` — enum с заимствованными ссылками в буфер, который вы дали
+`poll_output`:
+- `Packet(&[u8])` — отправить в UDP‑сокет.
+- `BufferTooSmall { needed }` — увеличить буфер и повторить.
+- `Timeout(Instant)` — запланировать таймер, вызвать
+  `handle_timeout` в этот (или позже) момент.
+- `Connected` — handshake завершён.
+- `PeerCert(&[u8])` — leaf‑сертификат пира (DER) для проверки.
+- `KeyingMaterial(KeyingMaterial, SrtpProfile)` — DTLS‑SRTP экспорт.
+- `ApplicationData(&[u8])` — открытый текст от пира.
+- `CloseNotify` — пир прислал `close_notify` (graceful shutdown).
+
+## Error handling
+
+Каждая `Error`, возвращённая публичным API
+([`handle_packet`][handle_packet], [`handle_timeout`][handle_timeout],
+`send_application_data`, `close`), **фатальна** для соединения: движок
+не имеет восстанавливаемых состояний, корректная реакция — выбросить
+`Dtls` и, если соединение ещё нужно, начать новый handshake.
+
+Транзиентные условия, свойственные ненадёжному транспорту — битые
+датаграммы, повторы, out‑of‑window записи, парсерный шум, **переполнение
+приёмной очереди** — обрабатываются внутри и наружу как `Error` не
+выходят. Такие пакеты тихо отбрасываются (лог `debug!`), соединение
+живёт дальше. Ошибку `Error` никогда не нужно интерпретировать как
+«повторить» — она всегда означает «сдаваться и рвать соединение».
+
+**Исключение — переполнение transmit‑очереди на горячем пути прикладных
+данных.** [`Dtls::send_application_data`][send_app] возвращает
+`Ok(0)`, если очередь переполнена; данные **не** приняты и их надо
+переслать после [`poll_output`][poll_output]. Это не ошибка соединения,
+это backpressure. См. также `Config::builder().max_queue_tx(...)`.
+
+## Example (Sans‑IO loop)
+
+```rust,no_run
+use std::sync::Arc;
+use std::time::Instant;
+
+use dimpl13::{certificate, Config, Dtls, Output};
+
+enum Event { Udp(Vec<u8>, Instant), Timer(Instant) }
+fn wait_next_event(_next_wake: Option<Instant>) -> Event {
+    Event::Udp(Vec::new(), Instant::now())
+}
+fn send_udp(_bytes: &[u8]) {}
+
+fn example_event_loop(mut dtls: Dtls) -> Result<(), dimpl13::Error> {
+    let mut next_wake: Option<Instant> = None;
+    let mut received_packet: Option<Vec<u8>> = None;
+    loop {
+        // Drain engine output until we have to wait for I/O or a timer.
+        let mut out_buf = vec![0u8; 2048];
+        loop {
+            match dtls.poll_output(&mut out_buf) {
+                Output::Packet(p) => send_udp(p),
+                Output::BufferTooSmall { needed } => {
+                    out_buf.resize(needed, 0);
+                }
+                Output::Timeout(t) => { next_wake = Some(t); break; }
+                Output::Connected => { /* ready to send app data */ }
+                Output::PeerCert(_der) => { /* validate if desired */ }
+                Output::KeyingMaterial(_km, _profile) => { /* feed SRTP */ }
+                Output::ApplicationData(_data) => { /* deliver to app */ }
+                Output::CloseNotify => return Ok(()),
+                _ => {}
+            }
+        }
+
+        if let Some(packet) = received_packet.take() {
+            dtls.handle_packet(&packet)?;
+            continue;
+        }
+
+        match wait_next_event(next_wake) {
+            Event::Udp(pkt, now) => {
+                dtls.handle_timeout(now)?;
+                received_packet = Some(pkt);
+            }
+            Event::Timer(now) => dtls.handle_timeout(now)?,
+        }
+    }
+}
+
+fn mk_dtls_client() -> Dtls {
+    let cert = certificate::generate_self_signed_certificate().unwrap();
+    let cfg = Arc::new(Config::default());
+    let mut dtls = Dtls::new_13(cfg, cert, Instant::now());
+    dtls.set_active(true); // client role
+    dtls
+}
+
+let dtls = mk_dtls_client();
+let _ = example_event_loop(dtls);
+```
+
+## Backpressure and queue sizes
+
+`Config::builder()` позволяет поднять размеры очередей, если ваш
+сценарий (например, KCP‑over‑DTLS) генерирует всплески:
+
+```rust,no_run
+# use std::sync::Arc;
+# use dimpl13::Config;
+let config = Arc::new(
+    Config::builder()
+        .max_queue_rx(256)
+        .max_queue_tx(256)
+        .build()
+        .unwrap(),
+);
+```
+
+Значения по умолчанию (`max_queue_rx = 30`, `max_queue_tx = 10`)
+рассчитаны на WebRTC и держат память на соединение минимальной. При
+`256 / 256` верхняя граница ~576 KB на соединение (2 × 256 × 1150 B),
+причём реально столько занимается только при полной загрузке очередей.
+
+## Versioning and divergence from upstream
+
+- Крейт **специально** не отслеживает `dimpl` один‑в‑один. Основные
+  изменения в публичном API относительно апстрима документируются в
+  [`CHANGELOG.md`].
+- Все правки, не связанные с удалением 1.2 или оптимизациями, по
+  возможности держатся в стиле апстрима, чтобы облегчить мерж
+  криптографических багов‑фиксов.
+- Если вы хотите upstream‑совместимое поведение, используйте
+  [dimpl][upstream].
+
+#### MSRV
+Rust 1.85.0
+
+#### Status
+- Session resumption не реализован (WebRTC делает full handshake на ICE restart).
+- Renegotiation в DTLS 1.3 не применим; используйте `KeyUpdate`.
+
+[upstream]: https://github.com/algesten/dimpl
+[send_app]: https://docs.rs/dimpl13/latest/dimpl13/struct.Dtls.html#method.send_application_data
+[peer_cert]: https://docs.rs/dimpl13/latest/dimpl13/enum.Output.html#variant.PeerCert
+[handle_packet]: https://docs.rs/dimpl13/latest/dimpl13/struct.Dtls.html#method.handle_packet
+[poll_output]: https://docs.rs/dimpl13/latest/dimpl13/struct.Dtls.html#method.poll_output
+[handle_timeout]: https://docs.rs/dimpl13/latest/dimpl13/struct.Dtls.html#method.handle_timeout
+[output]: https://docs.rs/dimpl13/latest/dimpl13/enum.Output.html
+[RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
+[RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
+[CHANGELOG.md]: ./CHANGELOG.md
+
+License: MIT OR Apache-2.0
+
+CHANGELOG.md не заполнен, а унаследован от апстрима. 
+Внесение вклада крайне приветствуется, однако пожалуйста, 
+добавляя функционал выносите это в cargo features. 
+Я не думаю слишком много о требованиях к вкладу, поэтому
+вы можете вносить вклад в dimpl13 свободно, в плане
+не ограничено строгими правилами. Используйте русский или английский,
+но исключительно английский в коде и коммитах, выносите значительные 
+фичи в cargo features, используйте cargo fmt. Документация на русском 
+не требование. Используйте issues, PR -- как вам удобно, я буду 
+поддерживать dimpl13, так как использую DTLS 1.3 в проде.
+Использование ИИ не запрещено и не требует маркировки, хотя я 
+всё же могу не рассматривать мусорный вклад.
