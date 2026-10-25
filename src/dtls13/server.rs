@@ -260,6 +260,16 @@ impl Server {
             return Ok(());
         }
 
+        // Ensure `random` is initialized. It is normally set lazily by
+        // `handle_timeout`, but `handle_packet` can drive the state machine
+        // all the way to `SendServerHello` (e.g. a second ClientHello echoing
+        // our HelloRetryRequest cookie) without a prior `handle_timeout`
+        // call. Without this, `send_server_hello` would panic on the missing
+        // random.
+        if self.random.is_none() {
+            self.random = Some(self.engine.random());
+        }
+
         // In auto-sense mode, buffer raw packets while still waiting for
         // the ClientHello so they can be replayed to Server12 on fallback.
         if self.auto_mode && self.state == State::AwaitClientHello {
@@ -325,27 +335,36 @@ impl Server {
     }
 
     /// Send application data when the server is connected.
-    pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
+    ///
+    /// Returns `true` if the bytes were accepted for transmission (either
+    /// buffered pre-handshake or enqueued as a ciphertext record), `false` if
+    /// the transmit queue was full and the caller should retry after draining
+    /// output via [`Self::poll_output`]. Returns `Err` only for fatal
+    /// conditions (closed connection, missing keys, etc.).
+    pub fn send_application_data(&mut self, data: &[u8]) -> Result<bool, Error> {
         if self.state == State::Closed || self.state == State::HalfClosedLocal {
             return Err(Error::ConnectionClosed);
         }
 
         if self.state != State::AwaitApplicationData {
             self.queued_data.push(data.to_buf());
-            return Ok(());
+            return Ok(true);
         }
 
         let epoch = self.engine.app_send_epoch();
-        self.engine.create_ciphertext_record(
+        match self.engine.create_ciphertext_record(
             ContentType::ApplicationData,
             epoch,
             false,
             |body| {
                 body.extend_from_slice(data);
             },
-        )?;
-
-        Ok(())
+        ) {
+            Ok(()) => Ok(true),
+            // Transient: the caller can retry once queue space frees up.
+            Err(Error::TransmitQueueFull) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// Initiate graceful shutdown by sending a `close_notify` alert.
@@ -762,8 +781,12 @@ impl State {
     }
 
     fn send_server_hello(self, server: &mut Server) -> Result<Self, InternalError> {
-        // unwrap: is ok because we set the random in handle_timeout
-        let random = server.random.unwrap();
+        // `random` is initialized at the top of `handle_packet` and
+        // `handle_timeout`; reaching SendServerHello always happens after one
+        // of those, so this expect never fires in practice.
+        let random = server
+            .random
+            .expect("random initialized in handle_packet/handle_timeout");
 
         // Extract stored data from extension_data
         let ext_data_len = server.extension_data.len();
@@ -1182,22 +1205,43 @@ impl State {
             server.initiate_key_update()?;
         }
 
-        // Send queued application data
+        // Flush queued application data (accumulated while the handshake was
+        // still in progress). If the transmit queue is full, the un-sent tail
+        // is retained on `queued_data` and retried on the next progress step;
+        // a partial flush never discards data.
         if !server.queued_data.is_empty() {
             let epoch = server.engine.app_send_epoch();
             debug!(
                 "Sending queued application data: {}",
                 server.queued_data.len()
             );
-            for data in server.queued_data.drain(..) {
-                server.engine.create_ciphertext_record(
+            let mut pending = std::mem::take(&mut server.queued_data);
+            let mut sent = 0usize;
+            let mut fatal: Option<Error> = None;
+
+            for (i, data) in pending.iter().enumerate() {
+                match server.engine.create_ciphertext_record(
                     ContentType::ApplicationData,
                     epoch,
                     false,
-                    |body| {
-                        body.extend_from_slice(&data);
-                    },
-                )?;
+                    |body| body.extend_from_slice(data),
+                ) {
+                    Ok(()) => sent = i + 1,
+                    Err(Error::TransmitQueueFull) => break, // keep remainder for later
+                    Err(e) => {
+                        fatal = Some(e);
+                        break;
+                    }
+                }
+            }
+
+            if sent > 0 {
+                pending.drain(..sent);
+            }
+            server.queued_data = pending;
+
+            if let Some(e) = fatal {
+                return Err(e.into());
             }
         }
 

@@ -357,14 +357,16 @@ impl Dtls {
     /// delivery. Currently accepts the entire slice or none of it.
     ///
     /// Data sent before handshake completion is buffered internally and returns
-    /// `Ok(data.len())`. An empty slice also returns `Ok(0)` on success; this
-    /// does not indicate handshake readiness.
+    /// `Ok(data.len())`. If the transmit queue is full, this returns `Ok(0)` and
+    /// the caller should retry after draining output via [`Self::poll_output`].
+    /// An empty slice also returns `Ok(0)` on success; this does not indicate
+    /// handshake readiness.
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<usize, Error> {
         match self.inner.as_mut().unwrap() {
             Inner::Client(c) => c.send_application_data(data),
             Inner::Server(s) => s.send_application_data(data),
         }
-        .map(|()| data.len())
+        .map(|accepted| if accepted { data.len() } else { 0 })
     }
 
     /// Initiate graceful shutdown by sending a `close_notify` alert.

@@ -219,27 +219,29 @@ impl Client {
     }
 
     /// Send application data when the client is connected.
-    pub fn send_application_data(&mut self, data: &[u8]) -> Result<(), Error> {
+    pub fn send_application_data(&mut self, data: &[u8]) -> Result<bool, Error> {
         if self.state == State::Closed || self.state == State::HalfClosedLocal {
             return Err(Error::ConnectionClosed);
         }
 
         if self.state != State::AwaitApplicationData {
             self.queued_data.push(data.to_buf());
-            return Ok(());
+            return Ok(true);
         }
 
         let epoch = self.engine.app_send_epoch();
-        self.engine.create_ciphertext_record(
+        match self.engine.create_ciphertext_record(
             ContentType::ApplicationData,
             epoch,
             false,
             |body| {
                 body.extend_from_slice(data);
             },
-        )?;
-
-        Ok(())
+        ) {
+            Ok(()) => Ok(true),
+            Err(Error::TransmitQueueFull) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// Initiate graceful shutdown by sending a `close_notify` alert.
@@ -1025,15 +1027,33 @@ impl State {
                 "Sending queued application data: {}",
                 client.queued_data.len()
             );
-            for data in client.queued_data.drain(..) {
-                client.engine.create_ciphertext_record(
+            let mut pending = std::mem::take(&mut client.queued_data);
+            let mut sent = 0usize;
+            let mut fatal: Option<Error> = None;
+
+            for (i, data) in pending.iter().enumerate() {
+                match client.engine.create_ciphertext_record(
                     ContentType::ApplicationData,
                     epoch,
                     false,
-                    |body| {
-                        body.extend_from_slice(&data);
-                    },
-                )?;
+                    |body| body.extend_from_slice(data),
+                ) {
+                    Ok(()) => sent = i + 1,
+                    Err(Error::TransmitQueueFull) => break,
+                    Err(e) => {
+                        fatal = Some(e);
+                        break;
+                    }
+                }
+            }
+
+            if sent > 0 {
+                pending.drain(..sent);
+            }
+            client.queued_data = pending;
+
+            if let Some(e) = fatal {
+                return Err(e.into());
             }
         }
 
