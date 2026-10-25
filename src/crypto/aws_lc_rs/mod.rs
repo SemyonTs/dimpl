@@ -57,12 +57,12 @@
 //! # fn main() {}
 //! ```
 
+mod cipher_suite;
 mod hash;
 pub(crate) mod hmac;
 mod kx_group;
 mod random;
 mod sign;
-mod cipher_suite;
 
 use super::CryptoProvider;
 

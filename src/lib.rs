@@ -177,8 +177,8 @@ use dtls13::{Client, Server};
 mod time_tricks;
 
 pub(crate) mod buffer;
-mod window;
 mod util;
+mod window;
 
 mod error;
 pub(crate) use error::InternalError;
@@ -196,8 +196,8 @@ pub mod certificate;
 pub mod crypto;
 pub use crypto::{KeyingMaterial, SrtpProfile};
 
-mod timer;
 mod rng;
+mod timer;
 pub(crate) use rng::SeededRng;
 
 /// Certificate and private key pair.
@@ -586,9 +586,7 @@ mod test {
         let mut extensions = Vec::new();
         extensions.extend_from_slice(&0x002Bu16.to_be_bytes());
         extensions.extend_from_slice(&(10u16).to_be_bytes());
-        extensions.extend_from_slice(&[
-            0x04, 0xFE, 0xFE, 0xFE, 0xFC, 0xFE, 0xFD, 0xFE, 0xFF, 0xFE,
-        ]);
+        extensions.extend_from_slice(&[0x04, 0xFE, 0xFE, 0xFE, 0xFC, 0xFE, 0xFD, 0xFE, 0xFF, 0xFE]);
 
         let body = dtls13_ch_body_with_extensions(&extensions);
         let len = body.len() as u32;

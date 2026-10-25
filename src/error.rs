@@ -14,7 +14,6 @@ pub(crate) fn bounded_error_len(len: usize) -> u16 {
     len.min(u16::MAX as usize) as u16
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 /// Errors returned by DTLS processing functions.

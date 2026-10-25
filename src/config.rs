@@ -412,7 +412,9 @@ impl ConfigBuilder {
             }
         };
         if dtls13_count == 0 {
-            return Err(Error::ConfigError(ConfigError::NoCipherSuitesAfterFiltering));
+            return Err(Error::ConfigError(
+                ConfigError::NoCipherSuitesAfterFiltering,
+            ));
         }
 
         // Validate kx_groups filter: DTLS 1.3 needs at least one group.
@@ -644,9 +646,7 @@ mod tests {
     #[test]
     fn empty_kx_groups_filter_rejected() {
         match Config::builder().kx_groups(&[]).build() {
-            Err(Error::ConfigError(
-                ConfigError::NoDtls13KeyExchangeGroupsAfterFiltering,
-            )) => {}
+            Err(Error::ConfigError(ConfigError::NoDtls13KeyExchangeGroupsAfterFiltering)) => {}
             Err(other) => panic!("expected ConfigError, got: {other:?}"),
             Ok(_) => panic!("expected error for empty kx groups"),
         }

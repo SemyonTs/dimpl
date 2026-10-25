@@ -1,7 +1,7 @@
 //! Cryptographic primitives and helpers used by the DTLS engine.
 
+pub use provider::{KeyProvider, SecureRandom, SignatureVerifier, SigningKey};
 use std::ops::Deref;
-pub use provider::{KeyProvider, SecureRandom, SigningKey, SignatureVerifier};
 
 // Internal module imports
 mod keying;
@@ -34,7 +34,8 @@ pub use crate::buffer::{Buf, TmpBuf};
 // Re-export all provider traits and types (similar to rustls structure)
 pub use provider::{
     ActiveKeyExchange, Cipher, CryptoProvider, CryptoSafe, HashContext, HashProvider, HmacProvider,
-    SupportedDtls13CipherSuite, SupportedKxGroup, };
+    SupportedDtls13CipherSuite, SupportedKxGroup,
+};
 #[cfg(feature = "_crypto-common")]
 pub use provider::{OID_P256, OID_P384, cert_named_group};
 
