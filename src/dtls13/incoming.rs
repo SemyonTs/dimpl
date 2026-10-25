@@ -206,6 +206,14 @@ impl Record {
         }
     }
 
+    /// Parse (and, for protected records, decrypt) a single record into a `ParsedRecord`.
+    ///
+    /// Hot-path note: for ciphertext records we deliberately avoid constructing an
+    /// intermediate `ParsedRecord` (which used to carry an inline
+    /// `ArrayVec<Handshake, 8>` ≈ 8 KB) before decryption. Instead we parse only
+    /// the small `Dtls13Record` header, decrypt, and box the final `ParsedRecord`
+    /// exactly once. This removes a per-packet 8 KB stack allocation, an 8 KB heap
+    /// allocation, and the associated memcpy on the application-data path.
     fn parse_buffer(
         buffer: &mut Buf,
         decrypt: &mut dyn RecordHandler,
@@ -219,8 +227,26 @@ impl Record {
             return Ok(None);
         }
 
-        // Decrypt record number in-place before parsing (RFC 9147 Section 4.2.3)
-        if is_ciphertext && decrypt.is_peer_encryption_enabled() {
+        // ---- Plaintext path: full parse + handshake extraction in one pass. ----
+        //
+        // Plaintext records (epoch 0) are never encrypted, so this is also the
+        // only place we ever parse handshakes out of the buffer at rest.
+        if !is_ciphertext {
+            let parsed = match ParsedRecord::parse(buffer, cs) {
+                Ok(p) => p,
+                Err(e) => {
+                    trace!("Discarding record: parse failed: {}", e);
+                    return Ok(None);
+                }
+            };
+            return Ok(Some(Box::new(parsed)));
+        }
+
+        // ---- Ciphertext path ----
+        //
+        // Small stack-only header struct is all we need before decrypting.
+        if decrypt.is_peer_encryption_enabled() {
+            // Decrypt record number in-place before parsing (RFC 9147 Section 4.2.3)
             let flags = buffer[0];
             let s_flag = flags & 0b0000_1000 != 0;
             let l_flag = flags & 0b0000_0100 != 0;
@@ -246,26 +272,30 @@ impl Record {
             }
         }
 
-        let parsed = match ParsedRecord::parse(buffer, cs) {
-            Ok(p) => p,
+        // Parse only the unified header (small on stack, no handshake list yet).
+        let header = match Dtls13Record::parse(buffer, 0) {
+            Ok((_, header)) => header,
             Err(e) => {
                 trace!("Discarding record: parse failed: {}", e);
                 return Ok(None);
             }
         };
-        let parsed = Box::new(parsed);
 
-        // Plaintext records (epoch 0) are not encrypted
-        if !is_ciphertext || !decrypt.is_peer_encryption_enabled() {
-            return Ok(Some(parsed));
+        // No keys yet: buffer the record as-is so the engine can re-parse it
+        // after `enable_peer_encryption` installs the epoch keys.
+        // The synthetic content type is `ApplicationData`, so `parse_handshakes_for`
+        // returns `None` — no handshake allocation even on this buffered path.
+        if !decrypt.is_peer_encryption_enabled() {
+            let parsed = ParsedRecord::parse_decrypted(header, buffer, cs);
+            return Ok(Some(Box::new(parsed)));
         }
 
         // Resolve the full epoch from the 2-bit value in the unified header
-        let epoch_bits = parsed.record.sequence.epoch as u8;
+        let epoch_bits = header.sequence.epoch as u8;
         let full_epoch = decrypt.resolve_epoch(epoch_bits);
 
         // Resolve the full sequence number from the (now decrypted) partial value
-        let seq_bits = parsed.record.sequence.sequence_number;
+        let seq_bits = header.sequence.sequence_number;
         let s_flag = buffer[0] & 0b0000_1000 != 0;
         let full_seq = decrypt.resolve_sequence(full_epoch, seq_bits, s_flag);
 
@@ -281,7 +311,7 @@ impl Record {
 
         // Save the raw header bytes for AAD before mutating the buffer.
         // Max unified header without CID: flags(1) + seq(2) + length(2) = 5 bytes.
-        let header_end = parsed.record.fragment_range.start;
+        let header_end = header.fragment_range.start;
 
         // Reject protected records whose encrypted fragment is shorter than
         // the per-suite minimum — they cannot hold a valid ciphertext + tag,
@@ -290,6 +320,7 @@ impl Record {
         if buffer.len() - header_end < decrypt.min_protected_fragment_len() {
             return Ok(None);
         }
+
         let mut header_buf = [0u8; 5];
         header_buf[..header_end].copy_from_slice(&buffer[..header_end]);
 
@@ -337,9 +368,7 @@ impl Record {
             buffer,
             cs,
         );
-        let parsed = Box::new(parsed);
-
-        Ok(Some(parsed))
+        Ok(Some(Box::new(parsed)))
     }
 
     pub fn record(&self) -> &Dtls13Record {
@@ -347,29 +376,39 @@ impl Record {
     }
 
     pub fn handshakes(&self) -> &[Handshake] {
-        &self.parsed.handshakes
+        match &self.parsed.handshakes {
+            Some(v) => v.as_slice(),
+            None => &[],
+        }
     }
 
     pub fn retain_handshakes(&mut self, mut keep: impl FnMut(&Handshake) -> bool) {
-        self.parsed.handshakes.retain(|handshake| keep(handshake));
+        if let Some(v) = &mut self.parsed.handshakes {
+            v.retain(|handshake| keep(handshake));
+        }
     }
 
     pub fn first_handshake(&self) -> Option<&Handshake> {
-        self.parsed.handshakes.first()
+        self.parsed.handshakes.as_deref().and_then(|v| v.first())
     }
 
     pub fn is_handled(&self) -> bool {
-        if self.parsed.handshakes.is_empty() {
-            self.parsed.handled.load(Ordering::Relaxed)
-        } else {
-            self.parsed.handshakes.iter().all(|h| h.is_handled())
+        match &self.parsed.handshakes {
+            Some(v) if !v.is_empty() => v.iter().all(|h| h.is_handled()),
+            _ => self.parsed.handled.load(Ordering::Relaxed),
         }
     }
 
     pub fn set_handled(&self) {
         // Handshakes should be empty because we set_handled() on them individually
         // during defragmentation. set_handled() on the record is only for non-handshakes.
-        assert!(self.parsed.handshakes.is_empty());
+        match &self.parsed.handshakes {
+            None => {}
+            Some(v) => assert!(
+                v.is_empty(),
+                "set_handled() requires no pending handshakes on the record"
+            ),
+        }
         self.parsed.handled.store(true, Ordering::Relaxed);
     }
 
@@ -384,7 +423,18 @@ impl Record {
 
 pub struct ParsedRecord {
     record: Dtls13Record,
-    handshakes: ArrayVec<Handshake, 8>,
+    /// Handshake fragments parsed from a handshake-content record.
+    ///
+    /// Only `Some` for records whose content type is `Handshake`. Application
+    /// data, alerts, and ACKs leave it `None`.
+    ///
+    /// Boxed so the fixed part of `ParsedRecord` stays at ~50 bytes. The
+    /// inline variant of `ArrayVec<Handshake, 8>` is ~8 KB because the
+    /// `Body::Certificate` variant carries a whole certificate list; paying
+    /// that per inbound record (even per app-data record) used to dominate
+    /// the steady-state receive path. Boxing only on handshake records
+    /// removes that cost with zero steady-state overhead.
+    handshakes: Option<Box<ArrayVec<Handshake, 8>>>,
     handled: AtomicBool,
 }
 
@@ -394,14 +444,7 @@ impl ParsedRecord {
         cipher_suite: Option<Dtls13CipherSuite>,
     ) -> Result<ParsedRecord, InternalError> {
         let (_, record) = Dtls13Record::parse(input, 0)?;
-
-        let handshakes = if record.content_type == ContentType::Handshake {
-            let fragment_offset = record.fragment_range.start;
-            parse_handshakes(record.fragment(input), fragment_offset, cipher_suite)
-        } else {
-            ArrayVec::new()
-        };
-
+        let handshakes = parse_handshakes_for(&record, input, cipher_suite);
         Ok(ParsedRecord {
             record,
             handshakes,
@@ -415,19 +458,33 @@ impl ParsedRecord {
         input: &[u8],
         cipher_suite: Option<Dtls13CipherSuite>,
     ) -> ParsedRecord {
-        let handshakes = if record.content_type == ContentType::Handshake {
-            let fragment_offset = record.fragment_range.start;
-            parse_handshakes(record.fragment(input), fragment_offset, cipher_suite)
-        } else {
-            ArrayVec::new()
-        };
-
+        let handshakes = parse_handshakes_for(&record, input, cipher_suite);
         ParsedRecord {
             record,
             handshakes,
             handled: AtomicBool::new(false),
         }
     }
+}
+
+/// Parse handshake fragments for a record, if and only if it's a handshake-content record.
+///
+/// Returning `None` for non-handshake content is what keeps the app-data hot
+/// path from ever touching the ~8 KB handshake scratch space.
+fn parse_handshakes_for(
+    record: &Dtls13Record,
+    input: &[u8],
+    cipher_suite: Option<Dtls13CipherSuite>,
+) -> Option<Box<ArrayVec<Handshake, 8>>> {
+    if record.content_type != ContentType::Handshake {
+        return None;
+    }
+    let fragment_offset = record.fragment_range.start;
+    Some(Box::new(parse_handshakes(
+        record.fragment(input),
+        fragment_offset,
+        cipher_suite,
+    )))
 }
 
 /// Trait abstracting record parsing-time handling for incoming records.
@@ -528,7 +585,7 @@ impl fmt::Debug for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Record")
             .field("record", &self.parsed.record)
-            .field("handshakes", &self.parsed.handshakes)
+            .field("handshakes", &self.handshakes())
             .finish()
     }
 }
@@ -685,6 +742,12 @@ mod tests {
             ContentType::ApplicationData
         );
         assert_eq!(incoming.first().record().sequence.epoch, 2);
+
+        // Fast path: non-handshake records never allocate a handshake array.
+        assert!(
+            incoming.first().parsed.handshakes.is_none(),
+            "application-data record must not carry an inline handshake array"
+        );
     }
 
     #[test]
