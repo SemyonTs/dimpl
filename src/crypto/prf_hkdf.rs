@@ -4,6 +4,8 @@
 //! This module provides generic implementations so that crypto backends only
 //! need to implement [`HmacProvider`] — no separate PRF or HKDF providers.
 
+use arrayvec::ArrayVec;
+
 use crate::CryptoError;
 use crate::buffer::Buf;
 use crate::types::HashAlgorithm;
@@ -12,6 +14,11 @@ use super::HmacProvider;
 
 /// Maximum HMAC output size we support (SHA-384 = 48 bytes).
 const MAX_HASH_LEN: usize = 48;
+
+/// Maximum size of a serialized HkdfLabel:
+/// `uint16 length` (2) + `uint8 label_len` (1) + `label<6..255>` (255)
+/// + `uint8 context_len` (1) + `context<0..255>` (255) = 514.
+const MAX_HKDF_LABEL_LEN: usize = 514;
 
 // ============================================================================
 // TLS 1.2 PRF (RFC 5246 Section 5)
@@ -74,6 +81,9 @@ pub fn prf_tls12(
 // ============================================================================
 
 /// HKDF-Extract: `PRK = HMAC-Hash(salt, IKM)`.
+///
+/// If `salt` is empty, a zero-salt of `hash_len` bytes is used (RFC 5869 §2.2).
+/// The zero-salt is stack-allocated; no heap allocation is performed here.
 pub fn hkdf_extract(
     hmac: &dyn HmacProvider,
     hash: HashAlgorithm,
@@ -84,10 +94,10 @@ pub fn hkdf_extract(
     out.clear();
 
     let hash_len = hash.output_len();
-    let zero_salt: Vec<u8>;
+    // Stack buffer covers the maximum hash_len (SHA-384 = 48 bytes).
+    let zero_salt = [0u8; MAX_HASH_LEN];
     let actual_salt = if salt.is_empty() {
-        zero_salt = vec![0u8; hash_len];
-        &zero_salt[..]
+        &zero_salt[..hash_len]
     } else {
         salt
     };
@@ -99,6 +109,9 @@ pub fn hkdf_extract(
 }
 
 /// HKDF-Expand: expand `prk` to `output_len` bytes.
+///
+/// The per-iteration `input` buffer (`T(i-1) || info || uint8 i`) is allocated
+/// once before the loop and reused; no heap allocation occurs inside the loop.
 pub fn hkdf_expand(
     hmac: &dyn HmacProvider,
     hash: HashAlgorithm,
@@ -116,9 +129,12 @@ pub fn hkdf_expand(
     let mut t_prev = [0u8; MAX_HASH_LEN];
     let mut t_prev_len = 0usize;
 
+    // Single allocation for the whole expansion.
+    let mut input = Vec::with_capacity(MAX_HASH_LEN + info.len() + 1);
+
     out.clear();
     for i in 1..=n {
-        let mut input = Vec::with_capacity(t_prev_len + info.len() + 1);
+        input.clear();
         input.extend_from_slice(&t_prev[..t_prev_len]);
         input.extend_from_slice(info);
         input.push(i as u8);
@@ -174,12 +190,15 @@ pub fn hkdf_expand_label_dtls13(
 ///     opaque context<0..255> = Context;
 /// } HkdfLabel;
 /// ```
+///
+/// The serialized label fits into a fixed-size `ArrayVec` (max 514 bytes),
+/// so this function performs no heap allocation.
 fn build_hkdf_label(
     prefix: &[u8],
     label: &[u8],
     context: &[u8],
     output_len: usize,
-) -> Result<Vec<u8>, CryptoError> {
+) -> Result<ArrayVec<u8, MAX_HKDF_LABEL_LEN>, CryptoError> {
     let full_label_len = prefix.len() + label.len();
 
     if full_label_len > 255 {
@@ -192,19 +211,13 @@ fn build_hkdf_label(
         return Err(CryptoError::HkdfOutputLengthTooLarge);
     }
 
-    let info_len = 2 + 1 + full_label_len + 1 + context.len();
-    let mut info = Vec::with_capacity(info_len);
-
-    // uint16 length
-    info.extend_from_slice(&(output_len as u16).to_be_bytes());
-    // opaque label
+    let mut info: ArrayVec<u8, MAX_HKDF_LABEL_LEN> = ArrayVec::new();
+    info.extend((output_len as u16).to_be_bytes());
     info.push(full_label_len as u8);
-    info.extend_from_slice(prefix);
-    info.extend_from_slice(label);
-    // opaque context
+    info.extend(prefix.iter().copied());
+    info.extend(label.iter().copied());
     info.push(context.len() as u8);
-    info.extend_from_slice(context);
-
+    info.extend(context.iter().copied());
     Ok(info)
 }
 
