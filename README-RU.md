@@ -17,6 +17,11 @@ SRTP‑ключей.
 
 - **Только DTLS 1.3.** Поддержки DTLS 1.0 и DTLS 1.2 в этом форке нет.
   Ни кода, ни API, ни документации про 1.2 здесь не осталось.
+- **Расширения DTLS 1.3.** Добавлены ALPN ([RFC 7301]), SNI ([RFC 6066]),
+  Connection ID ([RFC 9146]) и Record Size Limit ([RFC 8449]). Все они
+  настраиваются через `Config::builder()` и (где применимо) читаются через
+  `Dtls::negotiated_alpn()` / `Dtls::peer_server_name()`. Подробности —
+  в секции [Supported DTLS 1.3 extensions](#supported-dtls-13-extensions).
 - **Фокус на производительности.** Убран ряд не нужных для 1.3 абстракций
   (PSK, PRF‑TLS‑1.2, auto‑sense), уменьшены аллокации на горячем пути
   (`ParsedRecord` не таскает inline‑буфер handshake‑фрагментов на каждый
@@ -30,9 +35,22 @@ SRTP‑ключей.
 Если вам нужен DTLS 1.2 или auto‑sense (обнаружение версии по первому
 ClientHello) — используйте оригинальный [dimpl](https://github.com/algesten/dimpl).
 
+## Async wrapper for Tokio
+
+Если вам нужна асинхронная обвязка поверх Tokio вместо прямой работы с
+Sans‑IO движком — используйте крейт
+**[`tokio-dtls`](https://crates.io/crates/tokio-dtls)**. Он оборачивает
+`dimpl13` в привычный `async` API (`connect` / `accept`, `send` / `recv`,
+`close`), держит `UdpSocket` и фоновую задачу внутри и пробрасывает
+результаты согласования (ALPN, SNI) наружу через
+`DtlsConnection::negotiated_alpn()` / `DtlsConnection::peer_server_name()`.
+Криптография и state machine — те же, что и в `dimpl13`; меняется только
+модель использования. Выбирайте `tokio-dtls`, если не хотите писать свой
+event loop; `dimpl13` — если нужен полный контроль над движком.
+
 ## Goals
 - **DTLS 1.3**: реализует handshake и record layer в объёме, необходимом
-  для WebRTC.
+  для WebRTC и типовых UDP‑протоколов.
 - **Safety**: `forbid(unsafe_code)` во всём крейте.
 - **Minimal Rust‑only deps**: только небольшие, хорошо поддерживаемые
   Rust‑крейты для криптографии.
@@ -43,7 +61,8 @@ ClientHello) — используйте оригинальный [dimpl](https:/
 
 ### Non‑goals
 - **DTLS 1.0 / DTLS 1.2** (используйте [dimpl](https://github.com/algesten/dimpl) для DTLS 1.2)
-- **Async**: крейт Sans‑IO и не привязан к конкретному event loop.
+- **Async**: крейт Sans‑IO и не привязан к конкретному event loop
+  (для Tokio см. [tokio-dtls](https://crates.io/crates/tokio-dtls)).
 - **no_std** (наверное в принципе)
 - **RSA**
 - **DHE**
@@ -62,6 +81,70 @@ ClientHello) — используйте оригинальный [dimpl](https:/
 - **DTLS‑SRTP**: экспортирует keying material для
   `SRTP_AEAD_AES_256_GCM`, `SRTP_AEAD_AES_128_GCM` и
   `SRTP_AES128_CM_SHA1_80` ([RFC 5764], [RFC 7714]).
+
+## Supported DTLS 1.3 extensions
+
+Четыре расширения настраиваются через `dimpl13::Config::builder()` и
+(где применимо) наблюдаются через публичное API движка:
+
+| Расширение | Направление | Как настроить | Как прочитать |
+|---|---|---|---|
+| **ALPN** (RFC 7301) | обе стороны | `Config::builder().alpn_protocols(&[b"h2", …])` | `Dtls::negotiated_alpn()` |
+| **SNI** (RFC 6066) | клиент → сервер | `Config::builder().server_name("example.com")` | `Dtls::peer_server_name()` |
+| **Connection ID** (RFC 9146) | обе стороны | `Config::builder().connection_id(&[…])` | прозрачно |
+| **Record Size Limit** (RFC 8449) | обе стороны, асимметрично | `Config::builder().record_size_limit(1200)` | прозрачно |
+
+Детали:
+
+- **ALPN.** Клиент отправляет список протоколов; сервер выбирает один из
+  своего списка предпочтений. Обе стороны получают выбранный протокол
+  через `negotiated_alpn()`. Если пересечения нет, сервер аварийно
+  завершает handshake с `Error::SecurityError(NoCommonAlpnProtocol)` —
+  это корректное поведение по RFC 7301.
+- **SNI.** Клиент отправляет имя сервера; сервер может прочитать его
+  через `peer_server_name()`. На клиенте метод всегда возвращает `None`.
+  `dimpl13` **не** проверяет соответствие SNI сертификату пира — это
+  политика приложения.
+- **Connection ID.** Требуется настроить **на обеих** сторонах; иначе
+  расширение тихо отключается и wire‑формат возвращается к стандартному
+  заголовку записи. Транспарентно для `send_application_data` /
+  `Output::ApplicationData`. Это механизм, сохраняющий сессию при
+  NAT‑rebinding.
+- **Record Size Limit.** Каждая сторона объявляет максимальный размер
+  исходящих записей; лимит пира применяется к нашим исходящим записям.
+  По умолчанию `16385` (`Config::default()`). Асимметрично: достаточно,
+  чтобы одна сторона выставила значение. Полезно для constrained‑сетей.
+
+```rust,no_run
+use std::sync::Arc;
+use dimpl13::{Config, Dtls, certificate};
+use std::time::Instant;
+
+let config = Arc::new(
+    Config::builder()
+        .alpn_protocols(&[b"h2".as_slice(), b"http/1.1".as_slice()])
+        .server_name("example.com")               // только клиент
+        .connection_id(&[0xDE, 0xAD, 0xBE, 0xEF]) // обе стороны
+        .record_size_limit(1200)                  // обе стороны
+        .build()
+        .unwrap(),
+);
+let cert = certificate::generate_self_signed_certificate().unwrap();
+let mut dtls = Dtls::new_13(config, cert, Instant::now());
+dtls.set_active(true); // клиент
+
+// ... прогон handshake ...
+
+if let Some(proto) = dtls.negotiated_alpn() {
+    println!("negotiated ALPN: {}", String::from_utf8_lossy(proto));
+}
+// на сервере:
+// if let Some(sni) = dtls.peer_server_name() { … }
+```
+
+Если расширения не нужны, `Config::default()` даёт «голый» DTLS 1.3 без
+ALPN, без SNI, без Connection ID и с дефолтным Record Size Limit — это
+самый дешёвый режим.
 
 ### Certificate model
 Во время handshake движок выдаёт [`Output::PeerCert`][peer_cert] с
@@ -202,9 +285,9 @@ let config = Arc::new(
 - Крейт **специально** не отслеживает `dimpl` один‑в‑один. Основные
   изменения в публичном API относительно апстрима документируются в
   [`CHANGELOG.md`].
-- Все правки, не связанные с удалением 1.2 или оптимизациями, по
-  возможности держатся в стиле апстрима, чтобы облегчить мерж
-  криптографических багов‑фиксов.
+- Все правки, не связанные с удалением 1.2, добавлением расширений
+  (ALPN/SNI/CID/RSL) или оптимизациями, по возможности держатся в стиле
+  апстрима, чтобы облегчить мерж криптографических багов‑фиксов.
 - Если вы хотите upstream‑совместимое поведение, используйте
   [dimpl][upstream].
 
@@ -224,6 +307,10 @@ Rust 1.88.0
 [output]: https://docs.rs/dimpl13/latest/dimpl13/enum.Output.html
 [RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
 [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
+[RFC 6066]: https://www.rfc-editor.org/rfc/rfc6066
+[RFC 7301]: https://www.rfc-editor.org/rfc/rfc7301
+[RFC 8449]: https://www.rfc-editor.org/rfc/rfc8449
+[RFC 9146]: https://www.rfc-editor.org/rfc/rfc9146
 [CHANGELOG.md]: ./CHANGELOG.md
 
 License: MIT OR Apache-2.0

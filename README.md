@@ -17,6 +17,12 @@ module structure, and most of the public API. Differences:
 
 - **DTLS 1.3 only.** There is no support for DTLS 1.0 or DTLS 1.2 in this fork.
   No code, no API, no documentation about 1.2 remains here.
+- **DTLS 1.3 extensions.** ALPN ([RFC 7301]), SNI ([RFC 6066]),
+  Connection ID ([RFC 9146]), and Record Size Limit ([RFC 8449]) are
+  supported. All are configured through `Config::builder()` and, where they
+  have an observable result, read through `Dtls::negotiated_alpn()` /
+  `Dtls::peer_server_name()`. See
+  [Supported DTLS 1.3 extensions](#supported-dtls-13-extensions).
 - **Focus on performance.** A number of abstractions unnecessary for 1.3 have been removed
   (PSK, PRF-TLS-1.2, auto-sense), allocations on the hot path have been reduced
   (`ParsedRecord` no longer carries an inline buffer of handshake fragments for every
@@ -29,9 +35,21 @@ module structure, and most of the public API. Differences:
 If you need DTLS 1.2 or auto-sense (version detection from the first
 ClientHello) — use the original [dimpl](https://github.com/algesten/dimpl).
 
+## Async wrapper for Tokio
+
+If you want an async wrapper over Tokio instead of working directly with the
+Sans-IO engine, use the **[`tokio-dtls`](https://crates.io/crates/tokio-dtls)**
+crate. It wraps `dimpl13` in a familiar `async` API (`connect` / `accept`,
+`send` / `recv`, `close`), owns the `UdpSocket` and a background task
+internally, and forwards negotiation results (ALPN, SNI) outward through
+`DtlsConnection::negotiated_alpn()` / `DtlsConnection::peer_server_name()`.
+The cryptography and state machine are the same as in `dimpl13`; only the
+usage model changes. Pick `tokio-dtls` when you don't want to write your own
+event loop; pick `dimpl13` when you need full control over the engine.
+
 ## Goals
 - **DTLS 1.3**: implements the handshake and record layer to the extent necessary
-  for WebRTC.
+  for WebRTC and typical UDP protocols.
 - **Safety**: `forbid(unsafe_code)` throughout the crate.
 - **Minimal Rust-only deps**: only small, well-maintained
   Rust crates for cryptography.
@@ -42,7 +60,8 @@ ClientHello) — use the original [dimpl](https://github.com/algesten/dimpl).
 
 ### Non-goals
 - **DTLS 1.0 / DTLS 1.2** (use [dimpl](https://github.com/algesten/dimpl) for DTLS 1.2)
-- **Async**: the crate is Sans-IO and is not tied to a specific event loop.
+- **Async**: the crate is Sans-IO and is not tied to a specific event loop
+  (for Tokio, see [tokio-dtls](https://crates.io/crates/tokio-dtls)).
 - **no_std** (probably not in principle)
 - **RSA**
 - **DHE**
@@ -61,6 +80,70 @@ ClientHello) — use the original [dimpl](https://github.com/algesten/dimpl).
 - **DTLS-SRTP**: exports keying material for
   `SRTP_AEAD_AES_256_GCM`, `SRTP_AEAD_AES_128_GCM` and
   `SRTP_AES128_CM_SHA1_80` ([RFC 5764], [RFC 7714]).
+
+## Supported DTLS 1.3 extensions
+
+Four extensions are configured through `dimpl13::Config::builder()` and
+(where applicable) observed through the engine's public API:
+
+| Extension | Direction | How to configure | How to read |
+|---|---|---|---|
+| **ALPN** (RFC 7301) | both sides | `Config::builder().alpn_protocols(&[b"h2", …])` | `Dtls::negotiated_alpn()` |
+| **SNI** (RFC 6066) | client → server | `Config::builder().server_name("example.com")` | `Dtls::peer_server_name()` |
+| **Connection ID** (RFC 9146) | both sides | `Config::builder().connection_id(&[…])` | transparent |
+| **Record Size Limit** (RFC 8449) | both sides, asymmetric | `Config::builder().record_size_limit(1200)` | transparent |
+
+Details:
+
+- **ALPN.** The client sends a list of protocols; the server picks one from
+  its own preference list. Both sides then read the selected protocol through
+  `negotiated_alpn()`. If there is no intersection, the server aborts with
+  `Error::SecurityError(NoCommonAlpnProtocol)` — the correct RFC 7301
+  behavior.
+- **SNI.** The client sends a server name; the server can read it through
+  `peer_server_name()`. On the client the method always returns `None`.
+  `dimpl13` does **not** check that the SNI matches the peer's certificate —
+  that is application policy.
+- **Connection ID.** Requires configuring **both** sides; otherwise the
+  extension is silently disabled and the wire format falls back to the
+  standard record header. Transparent to `send_application_data` /
+  `Output::ApplicationData`. This is the mechanism that keeps a session
+  alive across NAT rebinding.
+- **Record Size Limit.** Each side advertises a maximum outgoing record
+  size; the peer's limit is applied to our outgoing records. Default is
+  `16385` (`Config::default()`). Asymmetric: it is enough for one side to
+  set it. Useful for constrained networks or path-MTU-limited tunnels.
+
+```rust,no_run
+use std::sync::Arc;
+use dimpl13::{Config, Dtls, certificate};
+use std::time::Instant;
+
+let config = Arc::new(
+    Config::builder()
+        .alpn_protocols(&[b"h2".as_slice(), b"http/1.1".as_slice()])
+        .server_name("example.com")               // client only
+        .connection_id(&[0xDE, 0xAD, 0xBE, 0xEF]) // both sides
+        .record_size_limit(1200)                  // both sides
+        .build()
+        .unwrap(),
+);
+let cert = certificate::generate_self_signed_certificate().unwrap();
+let mut dtls = Dtls::new_13(config, cert, Instant::now());
+dtls.set_active(true); // client
+
+// ... run the handshake ...
+
+if let Some(proto) = dtls.negotiated_alpn() {
+    println!("negotiated ALPN: {}", String::from_utf8_lossy(proto));
+}
+// on the server:
+// if let Some(sni) = dtls.peer_server_name() { … }
+```
+
+If you don't need any of these extensions, `Config::default()` gives you
+bare DTLS 1.3 — no ALPN, no SNI, no Connection ID, and the default Record
+Size Limit. This is the cheapest mode.
 
 ### Certificate model
 During the handshake the engine emits [`Output::PeerCert`][peer_cert] with the peer's
@@ -201,9 +284,9 @@ and that much is actually used only when the queues are fully loaded.
 - The crate **deliberately** does not track `dimpl` one-to-one. Major
   public API changes relative to upstream are documented in
   [`CHANGELOG.md`].
-- All changes not related to removing 1.2 or to optimizations are kept
-  in the upstream style where possible, to ease merging of
-  cryptographic bug fixes.
+- All changes not related to removing 1.2, adding extensions
+  (ALPN/SNI/CID/RSL), or to optimizations are kept in the upstream style
+  where possible, to ease merging of cryptographic bug fixes.
 - If you want upstream-compatible behavior, use
   [dimpl][upstream].
 
@@ -223,6 +306,10 @@ Rust 1.88.0
 [output]: https://docs.rs/dimpl13/latest/dimpl13/enum.Output.html
 [RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
 [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
+[RFC 6066]: https://www.rfc-editor.org/rfc/rfc6066
+[RFC 7301]: https://www.rfc-editor.org/rfc/rfc7301
+[RFC 8449]: https://www.rfc-editor.org/rfc/rfc8449
+[RFC 9146]: https://www.rfc-editor.org/rfc/rfc9146
 [CHANGELOG.md]: ./CHANGELOG.md
 
 License: MIT OR Apache-2.0
