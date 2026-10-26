@@ -135,17 +135,17 @@
 //! ```
 //!
 //! ### MSRV
-//! Rust 1.85.0
+//! Rust 1.88.0
 //!
 //! ### Status
 //! - Session resumption is not implemented (WebRTC does a full handshake on ICE restart).
 //! - Renegotiation is not applicable to DTLS 1.3 (use KeyUpdate instead).
 //!
-//! [peer_cert]: https://docs.rs/dimpl/latest/dimpl/enum.Output.html#variant.PeerCert
-//! [handle_packet]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.handle_packet
-//! [poll_output]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.poll_output
-//! [handle_timeout]: https://docs.rs/dimpl/latest/dimpl/struct.Dtls.html#method.handle_timeout
-//! [output]: https://docs.rs/dimpl/latest/dimpl/enum.Output.html
+//! [peer_cert]: https://docs.rs/dimpl13/latest/dimpl13/enum.Output.html#variant.PeerCert
+//! [handle_packet]: https://docs.rs/dimpl13/latest/dimpl13/struct.Dtls.html#method.handle_packet
+//! [poll_output]: https://docs.rs/dimpl13/latest/dimpl13/struct.Dtls.html#method.poll_output
+//! [handle_timeout]: https://docs.rs/dimpl13/latest/dimpl13/struct.Dtls.html#method.handle_timeout
+//! [output]: https://docs.rs/dimpl13/latest/dimpl13/enum.Output.html
 //! [RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
 //! [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
 //!
