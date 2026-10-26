@@ -80,6 +80,8 @@ impl ExtensionType {
     pub const ExtendedMasterSecret: Self = Self(0x0017);
     pub const TokenBinding: Self = Self(0x0018);
     pub const CachedInfo: Self = Self(0x0019);
+    /// RFC 8449 — RecordSizeLimit.
+    pub const RecordSizeLimit: Self = Self(0x001C);
     pub const SessionTicket: Self = Self(0x0023);
     pub const PreSharedKey: Self = Self(0x0029);
     pub const EarlyData: Self = Self(0x002A);
@@ -91,6 +93,8 @@ impl ExtensionType {
     pub const PostHandshakeAuth: Self = Self(0x0031);
     pub const SignatureAlgorithmsCert: Self = Self(0x0032);
     pub const KeyShare: Self = Self(0x0033);
+    /// RFC 9146 — ConnectionId (DTLS-only).
+    pub const ConnectionId: Self = Self(0x0036);
     pub const RenegotiationInfo: Self = Self(0xFF01);
 
     pub const fn from_u16(value: u16) -> Self {
@@ -104,7 +108,15 @@ impl ExtensionType {
     const fn is_unknown(&self) -> bool {
         !matches!(
             *self,
-            Self(0x0000..=0x0019 | 0x0023 | 0x0029..=0x002D | 0x002F..=0x0033 | 0xFF01)
+            Self(
+                0x0000..=0x0019
+                | 0x001C
+                | 0x0023
+                | 0x0029..=0x002D
+                | 0x002F..=0x0033
+                | 0x0036
+                | 0xFF01,
+            )
         )
     }
 
@@ -119,7 +131,13 @@ impl ExtensionType {
     }
 
     /// Supported extension types that this DTLS 1.3 implementation handles.
-    pub const fn supported() -> &'static [ExtensionType; 6] {
+    ///
+    /// Kept in lockstep with the `match` arms in `ClientHello::parse_extensions`,
+    /// `ServerHello::parse`, `EncryptedExtensions::parse`, and
+    /// `CertificateRequest::parse`. Adding an entry here means the raw bytes
+    /// survive into `extensions: ArrayVec<Extension, N>`; adding a matching
+    /// `match` arm additionally caches the parsed value into `ParsedExtensions`.
+    pub const fn supported() -> &'static [ExtensionType; 10] {
         &[
             ExtensionType::SupportedVersions,
             ExtensionType::SupportedGroups,
@@ -127,6 +145,10 @@ impl ExtensionType {
             ExtensionType::KeyShare,
             ExtensionType::UseSrtp,
             ExtensionType::Cookie,
+            ExtensionType::ServerName,
+            ExtensionType::ApplicationLayerProtocolNegotiation,
+            ExtensionType::RecordSizeLimit,
+            ExtensionType::ConnectionId,
         ]
     }
 }
@@ -166,6 +188,7 @@ impl fmt::Debug for ExtensionType {
             ExtensionType::ExtendedMasterSecret => "ExtendedMasterSecret",
             ExtensionType::TokenBinding => "TokenBinding",
             ExtensionType::CachedInfo => "CachedInfo",
+            ExtensionType::RecordSizeLimit => "RecordSizeLimit",
             ExtensionType::SessionTicket => "SessionTicket",
             ExtensionType::PreSharedKey => "PreSharedKey",
             ExtensionType::EarlyData => "EarlyData",
@@ -177,6 +200,7 @@ impl fmt::Debug for ExtensionType {
             ExtensionType::PostHandshakeAuth => "PostHandshakeAuth",
             ExtensionType::SignatureAlgorithmsCert => "SignatureAlgorithmsCert",
             ExtensionType::KeyShare => "KeyShare",
+            ExtensionType::ConnectionId => "ConnectionId",
             ExtensionType::RenegotiationInfo => "RenegotiationInfo",
             _ => unreachable!("known DTLS 1.3 extension type missing Debug label"),
         };
@@ -210,7 +234,10 @@ mod tests {
                 ExtensionType::from_u16(extension_type.as_u16()),
                 *extension_type
             );
-            assert!(!extension_type.is_unknown());
+            assert!(
+                !extension_type.is_unknown(),
+                "supported extension {extension_type:?} must not be unknown"
+            );
         }
 
         let unknown = ExtensionType::from_u16(0xFFFF);
@@ -219,11 +246,35 @@ mod tests {
     }
 
     #[test]
+    fn newly_supported_extensions_have_stable_oids() {
+        // Guards against accidental OID changes; values come from RFCs.
+        assert_eq!(ExtensionType::ServerName.as_u16(), 0x0000);
+        assert_eq!(
+            ExtensionType::ApplicationLayerProtocolNegotiation.as_u16(),
+            0x0010
+        );
+        assert_eq!(ExtensionType::RecordSizeLimit.as_u16(), 0x001C);
+        assert_eq!(ExtensionType::ConnectionId.as_u16(), 0x0036);
+    }
+
+    #[test]
+    fn supported_count_matches_array_capacity() {
+        // The array length must stay in sync with what `parse_extensions`
+        // and the per-message `ArrayVec<Extension, N>` capacities assume.
+        assert_eq!(ExtensionType::supported().len(), 10);
+    }
+
+    #[test]
     fn extension_type_debug_stays_enum_like() {
         assert_eq!(
             format!("{:?}", ExtensionType::SupportedGroups),
             "SupportedGroups"
         );
+        assert_eq!(
+            format!("{:?}", ExtensionType::RecordSizeLimit),
+            "RecordSizeLimit"
+        );
+        assert_eq!(format!("{:?}", ExtensionType::ConnectionId), "ConnectionId");
         assert_eq!(
             format!("{:?}", ExtensionType::from_u16(0xFFFF)),
             "Unknown(65535)"

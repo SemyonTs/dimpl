@@ -7,7 +7,7 @@ use arrayvec::ArrayVec;
 
 use super::{Aad, CryptoProvider, Nonce, SupportedKxGroup};
 use crate::buffer::{Buf, TmpBuf};
-use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup, SignatureAlgorithm};
+use crate::types::{Dtls13CipherSuite, HashAlgorithm, NamedGroup};
 use crate::{ConfigError, CryptoProviderValidationError, Error};
 
 fn provider_error(error: CryptoProviderValidationError) -> Error {
@@ -481,7 +481,6 @@ const SN_TEST_VECTORS: &[SnTestVector] = &[
 #[cfg(test)]
 #[cfg(feature = "aws-lc-rs")]
 mod tests_aws_lc_rs {
-    use super::*;
     use crate::crypto::aws_lc_rs;
 
     #[test]
@@ -509,7 +508,6 @@ mod tests_aws_lc_rs {
 #[cfg(test)]
 #[cfg(feature = "rust-crypto")]
 mod tests_rust_crypto {
-    use super::*;
     use crate::crypto::rust_crypto;
 
     #[test]

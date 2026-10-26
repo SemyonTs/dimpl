@@ -3,13 +3,16 @@
 // 1. Client sends ClientHello (plaintext, epoch 0)
 //    - Server validates: legacy_version==DTLS1.2, null compression offered
 //    - Server checks supported_versions for DTLS1.3
-//    - Server selects cipher suite, key exchange group, SRTP profile
+//    - Server selects cipher suite, key exchange group, SRTP profile, ALPN
+//    - Server parses SNI, RecordSizeLimit, ConnectionId from ClientHello
 //    - If no cookie: send HelloRetryRequest with HMAC-based cookie
 //    - If cookie present: validate HMAC, proceed
 //    - If no matching key_share but supported_groups match: HRR for key exchange
 // 2. Server sends ServerHello (plaintext, epoch 0)
+//    - Echoes ConnectionId if negotiated
 //    - Derives handshake secrets, installs handshake keys
 // 3. Server sends EncryptedExtensions (encrypted, epoch 2)
+//    - use_srtp, ALPN, SNI-ack, RecordSizeLimit
 // 4. Server sends CertificateRequest (optional, encrypted, epoch 2)
 // 5. Server sends Certificate (encrypted, epoch 2)
 // 6. Server sends CertificateVerify (encrypted, epoch 2)
@@ -56,6 +59,7 @@ use crate::dtls13::message::MessageType;
 use crate::dtls13::message::NamedGroup;
 use crate::dtls13::message::ProtocolVersion;
 use crate::dtls13::message::Random;
+use crate::dtls13::message::RecordSizeLimit;
 use crate::dtls13::message::ServerHello;
 use crate::dtls13::message::SessionId;
 use crate::dtls13::message::SignatureAlgorithmsExtension;
@@ -76,73 +80,27 @@ const MAX_RETAINED_CLIENT_HELLO: usize = 64;
 
 /// DTLS 1.3 server
 pub struct Server {
-    /// Current server state.
     state: State,
-
-    /// Engine in common between server and client.
     engine: Engine,
-
-    /// Random unique data. Used for ServerHello.
     random: Option<Random>,
-
-    /// Client's session ID echoed from ClientHello.
     client_session_id: Option<SessionId>,
-
-    /// Storage for extension data.
     extension_data: Buf,
-
-    /// The negotiated SRTP profile (if any).
     negotiated_srtp_profile: Option<SrtpProfile>,
-
-    /// Client certificates.
     client_certificates: Vec<Buf>,
-
-    /// Buffer for defragmenting handshakes.
     defragment_buffer: Buf,
-
-    /// The last now we seen.
     last_now: Instant,
-
-    /// Local events.
     local_events: VecDeque<LocalEvent>,
-
-    /// Data that is sent before we are connected.
     queued_data: Vec<Buf>,
-
-    /// Active key exchange state (ECDHE).
     active_key_exchange: Option<Box<dyn ActiveKeyExchange>>,
-
-    /// Saved shared secret for deriving application secrets later.
     shared_secret: Option<Buf>,
-
-    /// Saved handshake secret for deriving application secrets.
     handshake_secret: Option<Buf>,
-
-    /// Client handshake traffic secret (for client Finished verification).
     client_hs_traffic_secret: Option<Buf>,
-
-    /// Server handshake traffic secret (for server Finished).
     server_hs_traffic_secret: Option<Buf>,
-
-    /// Whether we requested client authentication.
     client_auth_requested: bool,
-
-    /// Whether we sent a HelloRetryRequest.
     hello_retry: bool,
-
-    /// Cookie secret for HMAC-based DoS protection.
     cookie_secret: [u8; 32],
-
-    /// Whether we need to respond with our own KeyUpdate.
     pending_key_update_response: bool,
-
-    /// When true, a ClientHello without DTLS 1.3 in `supported_versions`
-    /// returns [`Error::Dtls12Fallback`] instead of a security error.
-    /// Used by the auto-sense server path.
     auto_mode: bool,
-
-    /// Raw packets buffered during auto-sense so they can be replayed
-    /// to a DTLS 1.2 server on fallback.
     retained_hello: VecDeque<Buf>,
 }
 
@@ -164,19 +122,21 @@ enum State {
 }
 
 impl Server {
-    /// Create a new DTLS 1.3 server.
     pub fn new(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Server {
+        assert!(
+            !certificate.certificate.is_empty(),
+            "Server certificate cannot be empty"
+        );
         let engine = Engine::new(config, certificate);
         Self::new_with_engine(engine, now, false)
     }
 
-    /// Create a new DTLS 1.3 server in auto-sense mode.
-    ///
-    /// In auto-sense mode, if the ClientHello does not offer DTLS 1.3
-    /// in `supported_versions`, the server returns [`Error::Dtls12Fallback`]
-    /// instead of a fatal security error, allowing the caller to switch
-    /// to a DTLS 1.2 server.
+    #[allow(dead_code)]
     pub fn new_auto(config: Arc<Config>, certificate: DtlsCertificate, now: Instant) -> Server {
+        assert!(
+            !certificate.certificate.is_empty(),
+            "Server certificate cannot be empty"
+        );
         let engine = Engine::new(config, certificate);
         Self::new_with_engine(engine, now, true)
     }
@@ -216,17 +176,12 @@ impl Server {
         Client::new_with_engine(self.engine, self.last_now)
     }
 
-    /// Whether this server is in auto-sense mode.
+    #[allow(dead_code)]
     pub fn is_auto_mode(&self) -> bool {
         self.auto_mode
     }
 
-    /// Take all relevant config from this server instance.
-    ///
-    /// This is used in two cases:
-    ///
-    /// 1. Switching a server pending (auto-mode) to dtls12 server
-    /// 2. set_active(true), turning a server pending (auto-mode) to a ClientPending
+    #[allow(dead_code)]
     pub fn into_parts(
         self,
     ) -> (
@@ -238,6 +193,14 @@ impl Server {
     ) {
         let (config, cert, deadline) = self.engine.into_fallback();
         (config, cert, self.last_now, self.retained_hello, deadline)
+    }
+
+    pub fn negotiated_alpn(&self) -> Option<&[u8]> {
+        self.engine.negotiated_alpn()
+    }
+
+    pub fn peer_server_name(&self) -> Option<&[u8]> {
+        self.engine.peer_server_name()
     }
 
     pub(crate) fn state_name(&self) -> &'static str {
@@ -260,20 +223,11 @@ impl Server {
             return Ok(());
         }
 
-        // Ensure `random` is initialized. It is normally set lazily by
-        // `handle_timeout`, but `handle_packet` can drive the state machine
-        // all the way to `SendServerHello` (e.g. a second ClientHello echoing
-        // our HelloRetryRequest cookie) without a prior `handle_timeout`
-        // call. Without this, `send_server_hello` would panic on the missing
-        // random.
         if self.random.is_none() {
             self.random = Some(self.engine.random());
         }
 
-        // In auto-sense mode, buffer raw packets while still waiting for
-        // the ClientHello so they can be replayed to Server12 on fallback.
         if self.auto_mode && self.state == State::AwaitClientHello {
-            // Cap buffered fragments to prevent unbounded growth from malicious traffic
             if self.retained_hello.len() >= MAX_RETAINED_CLIENT_HELLO {
                 return Err(Error::TooManyClientHelloFragments);
             }
@@ -300,7 +254,6 @@ impl Server {
             }
         }
 
-        // Once past AwaitClientHello, DTLS 1.3 is committed — free the buffer.
         if self.auto_mode && self.state != State::AwaitClientHello {
             self.retained_hello.clear();
             self.auto_mode = false;
@@ -316,7 +269,6 @@ impl Server {
         self.engine.poll_output(buf, self.last_now)
     }
 
-    /// Handle a timeout event.
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), Error> {
         self.last_now = now;
         if self.random.is_none() {
@@ -334,13 +286,6 @@ impl Server {
             .create_key_update(KeyUpdateRequest::UpdateRequested)
     }
 
-    /// Send application data when the server is connected.
-    ///
-    /// Returns `true` if the bytes were accepted for transmission (either
-    /// buffered pre-handshake or enqueued as a ciphertext record), `false` if
-    /// the transmit queue was full and the caller should retry after draining
-    /// output via [`Self::poll_output`]. Returns `Err` only for fatal
-    /// conditions (closed connection, missing keys, etc.).
     pub fn send_application_data(&mut self, data: &[u8]) -> Result<bool, Error> {
         if self.state == State::Closed || self.state == State::HalfClosedLocal {
             return Err(Error::ConnectionClosed);
@@ -361,13 +306,11 @@ impl Server {
             },
         ) {
             Ok(()) => Ok(true),
-            // Transient: the caller can retry once queue space frees up.
             Err(Error::TransmitQueueFull) => Ok(false),
             Err(e) => Err(e),
         }
     }
 
-    /// Initiate graceful shutdown by sending a `close_notify` alert.
     pub fn close(&mut self) -> Result<(), Error> {
         if self.state == State::Closed || self.state == State::HalfClosedLocal {
             return Ok(());
@@ -380,8 +323,8 @@ impl Server {
         let epoch = self.engine.app_send_epoch();
         self.engine
             .create_ciphertext_record(ContentType::Alert, epoch, false, |body| {
-                body.push(1); // level: legacy (ignored in DTLS 1.3)
-                body.push(0); // description: close_notify
+                body.push(1);
+                body.push(0);
             })?;
         self.engine.cancel_flights();
         self.state = if self.engine.close_notify_received() {
@@ -395,7 +338,6 @@ impl Server {
     fn make_progress(&mut self) -> Result<(), InternalError> {
         loop {
             let prev_state = self.state;
-
             let new_state = prev_state.make_progress(self)?;
             if prev_state != new_state {
                 self.state = new_state;
@@ -446,8 +388,6 @@ impl State {
     }
 
     fn await_client_hello(self, server: &mut Server) -> Result<Self, InternalError> {
-        // Save transcript length so we can roll back if a stale ClientHello
-        // arrives after HelloRetryRequest (no cookie → must discard).
         let transcript_len_before = server.engine.transcript.len();
 
         let maybe = if server.auto_mode {
@@ -455,8 +395,6 @@ impl State {
                 .engine
                 .next_client_hello_for_auto_sense(&mut server.defragment_buffer)
                 .inspect_err(|_| {
-                    // Body rejection consumes the fragments; assembly errors
-                    // leave the same candidate queued and still needing replay.
                     if !server
                         .engine
                         .has_complete_handshake(MessageType::ClientHello)
@@ -485,7 +423,6 @@ impl State {
             .into());
         }
 
-        // Validate legacy_version
         if client_hello.legacy_version != ProtocolVersion::DTLS1_2 {
             return Err(Error::SecurityError(
                 crate::SecurityError::ClientHelloLegacyVersionNotDtls12,
@@ -493,7 +430,6 @@ impl State {
             .into());
         }
 
-        // Validate null compression is offered
         let has_null_compression = client_hello
             .legacy_compression_methods
             .contains(&CompressionMethod::Null);
@@ -516,10 +452,56 @@ impl State {
             .map(|groups| groups.as_slice())
             .unwrap_or(&[]);
         let client_srtp_profiles = client_hello.srtp_profiles();
+
+        // SNI: parse and record for the application to inspect.
+        if let Some(sni) = client_hello.server_name() {
+            if let Some(host) = sni.host_name(&server.defragment_buffer) {
+                let host = host.to_vec();
+                server.engine.set_peer_server_name(Some(&host));
+            }
+        }
+
+        // RFC 8449: peer's Record Size Limit bounds our outgoing record size.
+        if let Some(rsl) = client_hello.record_size_limit() {
+            server.engine.set_peer_record_size_limit(Some(rsl.limit));
+        }
+
+        // RFC 7301: negotiate ALPN — server preference order, first match wins.
+        if let Some(client_alpn) = client_hello.alpn() {
+            let server_protocols = server.engine.config().alpn_protocols();
+            let matched = server_protocols.iter().find(|sp| {
+                (0..client_alpn.names.len()).any(|i| {
+                    client_alpn
+                        .get(i, &server.defragment_buffer)
+                        .is_some_and(|cp| cp == sp.as_slice())
+                })
+            });
+            match matched {
+                Some(proto) => {
+                    let proto = proto.clone();
+                    server.engine.set_negotiated_alpn(Some(&proto));
+                }
+                None => {
+                    return Err(
+                        Error::SecurityError(crate::SecurityError::NoCommonAlpnProtocol).into(),
+                    );
+                }
+            }
+        }
+
+        // RFC 9146: enable CID only if BOTH sides configured one.
+        let peer_cid_opt = client_hello
+            .connection_id()
+            .map(|c| c.cid(&server.defragment_buffer).to_vec());
+        let local_cid_opt = server.engine.config().connection_id().map(|c| c.to_vec());
+        if let (Some(peer_cid), Some(local_cid)) = (peer_cid_opt, local_cid_opt) {
+            server.engine.set_peer_cid(Some(&peer_cid));
+            server.engine.set_local_cid(Some(&local_cid));
+        }
+
         let mut client_cookie_data: Option<ArrayVec<u8, 32>> = None;
         for ext in &client_hello.extensions {
             if ext.extension_type == ExtensionType::Cookie {
-                // This parser only checks a u16 length and returns a borrowed slice.
                 let (_, cookie) =
                     parse_cookie_extension(ext.extension_data(&server.defragment_buffer))
                         .map_err(InternalError::from)?;
@@ -539,7 +521,6 @@ impl State {
             .into());
         }
 
-        // Select cipher suite: first from client's list that is in our provider
         let selected_cipher_suite = client_hello
             .cipher_suites
             .iter()
@@ -549,15 +530,11 @@ impl State {
                 crate::SecurityError::NoCommonCipherSuite,
             ))?;
 
-        // Save the client random and session_id early so HRR can use them
         let client_random = client_hello.random;
         server.client_session_id = Some(client_hello.legacy_session_id);
 
-        // Cookie-based DoS protection
         let need_cookie = server.engine.config().use_server_cookie();
 
-        // Pre-compute whether we also need a key_share group selection, so
-        // we can piggyback it on a cookie HRR (avoiding two sequential HRRs).
         let our_groups: ArrayVec<NamedGroup, 4> = server
             .engine
             .config()
@@ -568,7 +545,6 @@ impl State {
             .iter()
             .any(|entry| our_groups.contains(&entry.group));
 
-        // Determine which group to request if key_share is missing
         let hrr_group = if !has_matching_key_share {
             our_groups
                 .iter()
@@ -586,7 +562,6 @@ impl State {
             );
 
             if let Some(ref cookie_bytes) = client_cookie_data {
-                // Validate the cookie
                 let is_valid: bool = cookie_bytes.as_slice().ct_eq(&expected_cookie).into();
                 if !is_valid {
                     return Err(Error::SecurityError(
@@ -596,23 +571,14 @@ impl State {
                 }
                 debug!("Cookie validated successfully");
             } else {
-                // No cookie: send HelloRetryRequest with cookie
                 if server.hello_retry {
-                    // Stale retransmission of the pre-HRR ClientHello. Roll back the
-                    // transcript that next_handshake just appended and silently
-                    // discard. The HRR flight will be retransmitted by the normal
-                    // flight timeout mechanism if the client hasn't responded.
                     debug!("Discarding stale ClientHello retransmission after HRR");
                     server.engine.transcript.resize(transcript_len_before, 0);
                     return Ok(Self::AwaitClientHello);
                 }
 
                 debug!("No cookie in ClientHello; sending HelloRetryRequest");
-
-                // Build HRR as a special ServerHello with magic random
                 server.engine.set_cipher_suite(selected_cipher_suite);
-                // Replace transcript BEFORE sending HRR so only CH1 is hashed
-                // per RFC 8446 Section 4.4.1.
                 let transcript_len = server.engine.transcript.len();
                 server
                     .engine
@@ -621,7 +587,7 @@ impl State {
                     server,
                     selected_cipher_suite,
                     &expected_cookie,
-                    hrr_group, // also request key_share group if needed
+                    hrr_group,
                 )?;
 
                 server.engine.advance_peer_handshake_seq();
@@ -631,7 +597,6 @@ impl State {
                 return Ok(Self::AwaitClientHello);
             }
         } else if let Some(ref cookie_bytes) = client_cookie_data {
-            // Validate if a cookie was provided even when not required
             let expected_cookie = compute_cookie(
                 &server.cookie_secret,
                 &client_random,
@@ -646,7 +611,6 @@ impl State {
             }
         }
 
-        // Select key exchange: find first client key_share with a group we support
         let matching_entry = key_shares
             .iter()
             .find(|entry| our_groups.contains(&entry.group));
@@ -654,14 +618,12 @@ impl State {
         let (selected_group, peer_key_range) = if let Some(entry) = matching_entry {
             (entry.group, entry.key_exchange_range.clone())
         } else {
-            // No matching key_share, but check supported_groups for a common group
             let common_group = our_groups
                 .iter()
                 .find(|g| client_groups.contains(g))
                 .copied();
 
             return if let Some(group) = common_group {
-                // Need HRR for key exchange
                 if server.hello_retry {
                     return Err(Error::SecurityError(
                         crate::SecurityError::CannotSendSecondHelloRetryRequest,
@@ -675,8 +637,6 @@ impl State {
                 );
 
                 server.engine.set_cipher_suite(selected_cipher_suite);
-                // Replace transcript BEFORE sending HRR so only CH1 is hashed
-                // per RFC 8446 Section 4.4.1.
                 let transcript_len = server.engine.transcript.len();
                 server
                     .engine
@@ -703,7 +663,6 @@ impl State {
             };
         };
 
-        // Start ECDHE key exchange
         let kx_group = server
             .engine
             .find_kx_group(selected_group)
@@ -716,14 +675,12 @@ impl State {
             .start_exchange(kx_buf)
             .map_err(Error::CryptoError)?;
 
-        // Store server's public key in extension_data
         server.extension_data.clear();
         let pub_key = key_exchange.pub_key();
         let pub_key_start = server.extension_data.len();
         server.extension_data.extend_from_slice(pub_key);
         let pub_key_end = server.extension_data.len();
 
-        // Complete ECDHE with client's public key
         let peer_pub_key = &server.defragment_buffer[peer_key_range];
         let mut shared_secret = server.engine.pop_buffer();
         key_exchange
@@ -732,9 +689,6 @@ impl State {
 
         server.shared_secret = Some(shared_secret);
 
-        // Select SRTP profile: first from client list that the server supports.
-        // Per RFC 5764 Section 4.1.1, the server MUST select a profile that
-        // both sides support.
         if let Some(profiles) = client_srtp_profiles {
             for profile_id in profiles {
                 let profile: SrtpProfile = (*profile_id).into();
@@ -745,19 +699,9 @@ impl State {
             }
         }
 
-        // Store selected group and public key range for ServerHello
-        // already completed
         server.active_key_exchange = None;
-
-        // Save selected cipher suite and key data for SendServerHello
         server.engine.set_cipher_suite(selected_cipher_suite);
 
-        // Store the selected group and pub key range in a way SendServerHello can access.
-        // We encode them into extension_data: first the group as 2 bytes, then the start/end
-        // Actually, we already wrote the pub key above. We'll store selected_group separately.
-        // Re-use extension_data: [pub_key_bytes...] at indices pub_key_start..pub_key_end.
-        // We'll pass this info through the state transition.
-        // For simplicity, store group and range in the Buf after pub_key:
         server
             .extension_data
             .extend_from_slice(&selected_group.as_u16().to_be_bytes());
@@ -781,16 +725,11 @@ impl State {
     }
 
     fn send_server_hello(self, server: &mut Server) -> Result<Self, InternalError> {
-        // `random` is initialized at the top of `handle_packet` and
-        // `handle_timeout`; reaching SendServerHello always happens after one
-        // of those, so this expect never fires in practice.
         let random = server
             .random
             .expect("random initialized in handle_packet/handle_timeout");
 
-        // Extract stored data from extension_data
         let ext_data_len = server.extension_data.len();
-        // Last 10 bytes: group(2) + start(4) + end(4)
         let meta_start = ext_data_len - 10;
         let group_bytes = [
             server.extension_data[meta_start],
@@ -810,7 +749,6 @@ impl State {
             server.extension_data[meta_start + 9],
         ]) as usize;
 
-        // Truncate the metadata we appended
         server.extension_data.resize(meta_start, 0);
 
         let client_session_id = SessionId::empty();
@@ -831,7 +769,6 @@ impl State {
                 )
             })?;
 
-        // Derive handshake secrets
         let shared_secret = server.shared_secret.take().ok_or(Error::InvalidState(
             crate::InvalidStateError::NoSharedSecretForHandshakeKeyDerivation,
         ))?;
@@ -839,16 +776,13 @@ impl State {
         let (c_hs_traffic, s_hs_traffic, handshake_secret) =
             server.engine.derive_handshake_secrets(&shared_secret)?;
 
-        // Save handshake secret for later application key derivation
         server.handshake_secret = Some(handshake_secret);
         server.engine.push_buffer(shared_secret);
 
-        // Install handshake keys
         server
             .engine
             .install_handshake_keys(&c_hs_traffic, &s_hs_traffic)?;
 
-        // Retain the derived buffers for Finished verification.
         server.server_hs_traffic_secret = Some(s_hs_traffic);
         server.client_hs_traffic_secret = Some(c_hs_traffic);
 
@@ -859,11 +793,20 @@ impl State {
         debug!("Sending EncryptedExtensions");
 
         let negotiated_srtp = server.negotiated_srtp_profile;
+        let negotiated_alpn = server.engine.negotiated_alpn().map(|b| b.to_vec());
+        let echo_sni = server.engine.peer_server_name().is_some();
+        let rsl_val = server.engine.config().record_size_limit();
 
         server
             .engine
             .create_handshake(MessageType::EncryptedExtensions, |body, _engine| {
-                handshake_create_encrypted_extensions(body, negotiated_srtp)
+                handshake_create_encrypted_extensions(
+                    body,
+                    negotiated_srtp,
+                    negotiated_alpn.as_deref(),
+                    echo_sni,
+                    rsl_val,
+                )
             })?;
 
         if server.engine.config().require_client_certificate() {
@@ -883,7 +826,6 @@ impl State {
             })?;
 
         server.client_auth_requested = true;
-
         Ok(Self::SendCertificate)
     }
 
@@ -937,7 +879,6 @@ impl State {
                 Ok(())
             })?;
 
-        // Derive application secrets from handshake secret + transcript through server Finished
         let handshake_secret = server.handshake_secret.as_ref().ok_or(Error::InvalidState(
             crate::InvalidStateError::NoHandshakeSecretForApplicationKeyDerivation,
         ))?;
@@ -945,12 +886,10 @@ impl State {
         let (c_ap_traffic, s_ap_traffic) =
             server.engine.derive_application_secrets(handshake_secret)?;
 
-        // Install application keys
         server
             .engine
             .install_application_keys(&c_ap_traffic, &s_ap_traffic)?;
 
-        // Enable peer encryption so we can decrypt client's epoch 2 messages
         server.engine.enable_peer_encryption()?;
 
         if server.client_auth_requested {
@@ -975,13 +914,12 @@ impl State {
 
         if certificate.certificate_list.is_empty() {
             server.engine.abort();
-            // Server Finished was already sent, so the client now reads epoch 3.
             let epoch = server.engine.app_send_epoch();
             server
                 .engine
                 .create_ciphertext_record(ContentType::Alert, epoch, false, |body| {
-                    body.push(2); // legacy level (ignored in DTLS 1.3)
-                    body.push(116); // certificate_required
+                    body.push(2);
+                    body.push(116);
                 })?;
             server.state = State::Closed;
             return Err(Error::CertificateError(
@@ -995,7 +933,6 @@ impl State {
             certificate.certificate_list.len()
         );
 
-        // Extract certificate data before dropping handshake
         let cert_ranges: ArrayVec<_, 32> = certificate
             .certificate_list
             .iter()
@@ -1015,23 +952,16 @@ impl State {
             server.client_certificates.push(buf);
         }
 
-        // Emit PeerCert event
         if !server.client_certificates.is_empty() {
             server.local_events.push_back(LocalEvent::PeerCert);
         }
 
-        // Client's Certificate means our flight was received; stop retransmitting
         server.engine.flight_stop_resend_timers();
-
         server.engine.advance_peer_handshake_seq();
         Ok(Self::AwaitCertificateVerify)
     }
 
     fn await_certificate_verify(self, server: &mut Server) -> Result<Self, InternalError> {
-        // Compute transcript hash BEFORE consuming CertificateVerify.
-        // Per RFC 8446 §4.4.3, the hash covers all messages up to but NOT
-        // including CertificateVerify. next_handshake() will append CV to
-        // the transcript, so we must capture the hash first.
         let mut transcript_hash = Buf::new();
         server.engine.transcript_hash(&mut transcript_hash);
 
@@ -1051,8 +981,6 @@ impl State {
         let scheme = cv.signed.scheme;
         let signature = cv.signed.signature(&server.defragment_buffer);
 
-        // RFC 8446 §4.4.3: The signature algorithm MUST be one offered in
-        // the signature_algorithms field of the CertificateRequest message.
         if !SignatureScheme::supported().contains(&scheme) {
             return Err(
                 Error::SecurityError(crate::SecurityError::SignatureSchemeNotOffered(scheme))
@@ -1060,14 +988,11 @@ impl State {
             );
         }
 
-        // Build the signed content per RFC 8446 Section 4.4.3:
-        // 0x20 * 64 || "TLS 1.3, client CertificateVerify\0" || transcript_hash
         let mut signed_content = Buf::new();
         signed_content.extend_from_slice(&[0x20u8; 64]);
         signed_content.extend_from_slice(b"TLS 1.3, client CertificateVerify\0");
         signed_content.extend_from_slice(&transcript_hash);
 
-        // Copy signature data since we need to drop handshake reference
         let mut signature_copy = ArrayVec::<u8, 512>::new();
         signature_copy
             .try_extend_from_slice(signature)
@@ -1075,7 +1000,6 @@ impl State {
 
         drop(maybe);
 
-        // Verify the signature
         let cert_der = server
             .client_certificates
             .first()
@@ -1103,8 +1027,6 @@ impl State {
     }
 
     fn await_finished(self, server: &mut Server) -> Result<Self, InternalError> {
-        // Compute expected verify_data BEFORE consuming Finished
-        // (verify_data uses transcript hash up to but not including Finished)
         let client_hs_secret =
             server
                 .client_hs_traffic_secret
@@ -1134,7 +1056,6 @@ impl State {
             expected_verify_data.len()
         );
 
-        // Constant-time comparison
         let is_eq: bool = verify_data.ct_eq(&*expected_verify_data).into();
         if !is_eq {
             return Err((Error::SecurityError(
@@ -1149,7 +1070,6 @@ impl State {
 
         server.engine.advance_peer_handshake_seq();
 
-        // No records from the handshake epochs may survive into application data.
         let unexpected_record = server
             .engine
             .pending_records()
@@ -1165,16 +1085,10 @@ impl State {
             );
         }
 
-        // ACK the client's epoch-2 flight so it stops retransmitting
         server.engine.send_ack_retransmittable()?;
-
-        // Stop flight timers - handshake complete
         server.engine.flight_stop_resend_timers();
-
-        // Emit Connected event
         server.local_events.push_back(LocalEvent::Connected);
 
-        // Extract and emit SRTP keying material if negotiated
         if let Some(profile) = server.negotiated_srtp_profile {
             if let Ok((keying_material, profile)) =
                 server.engine.extract_srtp_keying_material(profile)
@@ -1195,20 +1109,14 @@ impl State {
             .release_application_data_retaining_handshake_keys();
 
         debug!("Handshake complete; ready for application data");
-
         Ok(Self::AwaitApplicationData)
     }
 
     fn await_application_data(self, server: &mut Server) -> Result<Self, InternalError> {
-        // Auto-trigger KeyUpdate when AEAD encryption limit is reached
         if server.engine.needs_key_update() && !server.engine.is_key_update_in_flight() {
             server.initiate_key_update()?;
         }
 
-        // Flush queued application data (accumulated while the handshake was
-        // still in progress). If the transmit queue is full, the un-sent tail
-        // is retained on `queued_data` and retried on the next progress step;
-        // a partial flush never discards data.
         if !server.queued_data.is_empty() {
             let epoch = server.engine.app_send_epoch();
             debug!(
@@ -1227,7 +1135,7 @@ impl State {
                     |body| body.extend_from_slice(data),
                 ) {
                     Ok(()) => sent = i + 1,
-                    Err(Error::TransmitQueueFull) => break, // keep remainder for later
+                    Err(Error::TransmitQueueFull) => break,
                     Err(e) => {
                         fatal = Some(e);
                         break;
@@ -1245,7 +1153,6 @@ impl State {
             }
         }
 
-        // Send pending KeyUpdate response before processing new KeyUpdates
         if server.pending_key_update_response {
             server
                 .engine
@@ -1253,7 +1160,6 @@ impl State {
             server.pending_key_update_response = false;
         }
 
-        // Check for incoming KeyUpdate
         if server.engine.has_complete_handshake(MessageType::KeyUpdate) {
             let maybe = server.engine.next_handshake_no_transcript(
                 MessageType::KeyUpdate,
@@ -1265,13 +1171,9 @@ impl State {
                     unreachable!()
                 };
 
-                // Install new recv keys
                 server.engine.update_recv_keys()?;
-
-                // ACK the KeyUpdate record
                 server.engine.send_ack()?;
 
-                // If peer requested us to update, schedule our own KeyUpdate
                 if request == KeyUpdateRequest::UpdateRequested
                     && !server.engine.is_key_update_in_flight()
                 {
@@ -1287,8 +1189,6 @@ impl State {
     }
 
     fn half_closed_local(self, server: &mut Server) -> Result<Self, InternalError> {
-        // Write half is closed: drain incoming KeyUpdate to keep recv keys in sync,
-        // but do not send our own KeyUpdate response.
         if server.engine.has_complete_handshake(MessageType::KeyUpdate) {
             let maybe = server.engine.next_handshake_no_transcript(
                 MessageType::KeyUpdate,
@@ -1315,21 +1215,16 @@ impl State {
 // Helper Functions
 // =========================================================================
 
-/// Compute a cookie for DoS protection using HMAC-SHA256.
-///
-/// The cookie is HMAC-SHA256(cookie_secret, client_random.bytes), truncated to 32 bytes.
 fn compute_cookie(
     cookie_secret: &[u8; 32],
     client_random: &Random,
     hmac_provider: &'static dyn crate::crypto::HmacProvider,
 ) -> [u8; 32] {
-    // unwrap: HMAC-SHA256 should not fail with valid key/data
     hmac_provider
         .hmac_sha256(cookie_secret, &client_random.bytes)
         .unwrap()
 }
 
-/// Send a HelloRetryRequest (encoded as a ServerHello with magic random).
 fn send_hello_retry_request(
     server: &mut Server,
     cipher_suite: Dtls13CipherSuite,
@@ -1341,11 +1236,9 @@ fn send_hello_retry_request(
 
     server.engine.flight_begin(2);
 
-    // Build extension data into a local buffer
     let mut ext_buf = Buf::new();
     let mut extensions: ArrayVec<Extension, 5> = ArrayVec::new();
 
-    // 1. supported_versions extension (DTLS 1.3)
     let sv_start = ext_buf.len();
     let sv = SupportedVersionsServerHello {
         selected_version: ProtocolVersion::DTLS1_3,
@@ -1357,7 +1250,6 @@ fn send_hello_retry_request(
         extension_data_range: sv_start..sv_end,
     });
 
-    // 2. key_share extension (selected group for retry) if needed
     if let Some(group) = selected_group {
         let ks_start = ext_buf.len();
         let hrr_ks = KeyShareHelloRetryRequest {
@@ -1371,9 +1263,7 @@ fn send_hello_retry_request(
         });
     }
 
-    // 3. cookie extension
     let cookie_start = ext_buf.len();
-    // Cookie extension format: cookie<1..2^16-1> (u16-length-prefixed)
     ext_buf.extend_from_slice(&(cookie.len() as u16).to_be_bytes());
     ext_buf.extend_from_slice(cookie);
     let cookie_end = ext_buf.len();
@@ -1410,14 +1300,11 @@ fn handshake_create_server_hello(
     pub_key_range: std::ops::Range<usize>,
     extension_data: &Buf,
 ) -> Result<(), Error> {
-    // unwrap: cipher_suite is set by AwaitClientHello
     let cipher_suite = engine.cipher_suite().unwrap();
 
-    // Build extensions
     let mut ext_buf = Buf::new();
     let mut extensions: ArrayVec<Extension, 5> = ArrayVec::new();
 
-    // 1. supported_versions extension (DTLS 1.3)
     let sv_start = ext_buf.len();
     let sv = SupportedVersionsServerHello {
         selected_version: ProtocolVersion::DTLS1_3,
@@ -1429,7 +1316,6 @@ fn handshake_create_server_hello(
         extension_data_range: sv_start..sv_end,
     });
 
-    // 2. key_share extension (server's public key)
     let ks_start = ext_buf.len();
     let ks = KeyShareServerHello {
         entry: KeyShareEntry {
@@ -1443,6 +1329,17 @@ fn handshake_create_server_hello(
         extension_type: ExtensionType::KeyShare,
         extension_data_range: ks_start..ks_end,
     });
+
+    if let Some(cid) = engine.local_cid() {
+        let cid_start = ext_buf.len();
+        ext_buf.push(cid.len() as u8);
+        ext_buf.extend_from_slice(cid);
+        let cid_end = ext_buf.len();
+        extensions.push(Extension {
+            extension_type: ExtensionType::ConnectionId,
+            extension_data_range: cid_start..cid_end,
+        });
+    }
 
     let server_hello = ServerHello::new(
         ProtocolVersion::DTLS1_2,
@@ -1460,11 +1357,14 @@ fn handshake_create_server_hello(
 fn handshake_create_encrypted_extensions(
     body: &mut Buf,
     negotiated_srtp: Option<SrtpProfile>,
+    negotiated_alpn: Option<&[u8]>,
+    echo_server_name: bool,
+    record_size_limit: u16,
 ) -> Result<(), Error> {
     let mut ext_buf = Buf::new();
-    let mut extensions: ArrayVec<Extension, 5> = ArrayVec::new();
+    // 6 gives room for use_srtp + ALPN + SNI-ack + RecordSizeLimit + spare.
+    let mut extensions: ArrayVec<Extension, 6> = ArrayVec::new();
 
-    // use_srtp extension if negotiated
     if let Some(profile) = negotiated_srtp {
         let srtp_start = ext_buf.len();
         let profile_id: crate::dtls13::message::SrtpProfileId = profile.into();
@@ -1479,7 +1379,39 @@ fn handshake_create_encrypted_extensions(
         });
     }
 
-    // Serialize EncryptedExtensions: extensions_len(2) + extensions
+    if let Some(alpn) = negotiated_alpn {
+        let alpn_start = ext_buf.len();
+        ext_buf.extend_from_slice(&((1 + alpn.len()) as u16).to_be_bytes());
+        ext_buf.push(alpn.len() as u8);
+        ext_buf.extend_from_slice(alpn);
+        let alpn_end = ext_buf.len();
+        extensions.push(Extension {
+            extension_type: ExtensionType::ApplicationLayerProtocolNegotiation,
+            extension_data_range: alpn_start..alpn_end,
+        });
+    }
+
+    if echo_server_name {
+        let sn_start = ext_buf.len();
+        ext_buf.extend_from_slice(&0u16.to_be_bytes());
+        let sn_end = ext_buf.len();
+        extensions.push(Extension {
+            extension_type: ExtensionType::ServerName,
+            extension_data_range: sn_start..sn_end,
+        });
+    }
+
+    let rsl_start = ext_buf.len();
+    RecordSizeLimit {
+        limit: record_size_limit,
+    }
+    .serialize(&mut ext_buf);
+    let rsl_end = ext_buf.len();
+    extensions.push(Extension {
+        extension_type: ExtensionType::RecordSizeLimit,
+        extension_data_range: rsl_start..rsl_end,
+    });
+
     let mut extensions_len = 0usize;
     for ext in &extensions {
         let ext_data = ext.extension_data(&ext_buf);
@@ -1496,15 +1428,11 @@ fn handshake_create_encrypted_extensions(
 }
 
 fn handshake_create_certificate_request(body: &mut Buf) -> Result<(), Error> {
-    // CertificateRequest format (RFC 8446 Section 4.3.2):
-    // certificate_request_context<0..255>
-    body.push(0); // empty context
+    body.push(0);
 
-    // extensions<2..2^16-1>
     let mut ext_buf = Buf::new();
     let mut extensions: ArrayVec<Extension, 5> = ArrayVec::new();
 
-    // signature_algorithms extension (required)
     let sa_start = ext_buf.len();
     let sa = SignatureAlgorithmsExtension::default();
     sa.serialize(&mut ext_buf);
@@ -1514,7 +1442,6 @@ fn handshake_create_certificate_request(body: &mut Buf) -> Result<(), Error> {
         extension_data_range: sa_start..sa_end,
     });
 
-    // Calculate total extensions length
     let mut extensions_len = 0usize;
     for ext in &extensions {
         let ext_data = ext.extension_data(&ext_buf);
@@ -1537,8 +1464,6 @@ mod tests {
     #[test]
     #[cfg(feature = "rcgen")]
     fn auto_retains_hello_when_assembly_is_incomplete() {
-        // The coverage check sees both bytes, but defragmentation stops at the
-        // different message type, leaving both fragments queued for later.
         let fragments = [
             (MessageType::ClientHello, 0, 1),
             (MessageType::ServerHello, 1, 1),
@@ -1560,7 +1485,6 @@ mod tests {
     #[cfg(feature = "rcgen")]
     fn client_hello_fragments(length: u32, fragments: &[(MessageType, u32, u32)]) -> Vec<u8> {
         let mut packet = Vec::new();
-        // Each record holds at most eight parsed handshake fragments.
         for (seq, record_fragments) in fragments.chunks(8).enumerate() {
             let mut record = Vec::new();
             for &(kind, offset, fragment_len) in record_fragments {
@@ -1599,7 +1523,6 @@ mod tests {
         while !matches!(server.poll_output(&mut output), Output::Timeout(_)) {}
         assert!(server.engine.transcript.is_empty());
 
-        // Reattempting assembly proves that the candidate was not consumed.
         let error = server
             .engine
             .next_client_hello_for_auto_sense(&mut server.defragment_buffer)

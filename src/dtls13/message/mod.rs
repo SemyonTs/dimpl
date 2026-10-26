@@ -25,10 +25,16 @@ pub use client_hello::ClientHello;
 pub use digitally_signed::DigitallySigned;
 pub use encrypted_extensions::EncryptedExtensions;
 pub use extension::{Extension, ExtensionType};
+pub use extensions::alpn::ProtocolNameList;
+pub use extensions::connection_id::{ConnectionId, MAX_CID_LEN};
 pub(crate) use extensions::cookie::parse_cookie_extension;
 pub use extensions::key_share::{
     KeyShareClientHello, KeyShareEntry, KeyShareHelloRetryRequest, KeyShareServerHello,
 };
+pub use extensions::record_size_limit::{
+    MAX_RECORD_SIZE_LIMIT, MIN_RECORD_SIZE_LIMIT, RecordSizeLimit,
+};
+pub use extensions::server_name::ServerNameList;
 pub use extensions::signature_algorithms::SignatureAlgorithmsExtension;
 pub use extensions::supported_groups::SupportedGroupsExtension;
 pub use extensions::supported_versions::{

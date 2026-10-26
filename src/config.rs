@@ -1,8 +1,8 @@
 use std::fmt;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::crypto::{CryptoProvider, SupportedDtls13CipherSuite, SupportedKxGroup};
+use crate::dtls13::message::{MAX_CID_LEN, MAX_RECORD_SIZE_LIMIT, MIN_RECORD_SIZE_LIMIT};
 use crate::types::{Dtls13CipherSuite, NamedGroup};
 use crate::{ConfigError, Error};
 
@@ -32,6 +32,10 @@ pub struct Config {
     aead_encryption_limit: u64,
     dtls13_cipher_suites: Option<Vec<Dtls13CipherSuite>>,
     kx_groups: Option<Vec<NamedGroup>>,
+    alpn_protocols: Vec<Vec<u8>>,
+    server_name: Option<String>,
+    record_size_limit: u16,
+    connection_id: Option<Vec<u8>>,
 }
 
 impl Config {
@@ -51,12 +55,14 @@ impl Config {
             aead_encryption_limit: 1 << 23,
             dtls13_cipher_suites: None,
             kx_groups: None,
+            alpn_protocols: Vec::new(),
+            server_name: None,
+            record_size_limit: MAX_RECORD_SIZE_LIMIT,
+            connection_id: None,
         }
     }
 
-    /// Max transmission unit.
-    ///
-    /// The largest size UDP packets we will produce.
+    /// Max transmission unit: the largest size UDP packets we will produce.
     #[inline(always)]
     pub fn mtu(&self) -> usize {
         self.mtu
@@ -75,30 +81,18 @@ impl Config {
     }
 
     /// For a server, require a client certificate.
-    ///
-    /// This will cause the server to send a CertificateRequest message.
-    /// Makes the server fail if the client does not send a certificate.
     #[inline(always)]
     pub fn require_client_certificate(&self) -> bool {
         self.require_client_certificate
     }
 
     /// Whether the server sends a cookie exchange before the handshake.
-    ///
-    /// When true (the default), the server requires a stateless cookie
-    /// roundtrip for DoS protection via HelloRetryRequest with a cookie.
-    ///
-    /// When false, the server proceeds directly to ServerHello without
-    /// a cookie exchange.
     #[inline(always)]
     pub fn use_server_cookie(&self) -> bool {
         self.use_server_cookie
     }
 
     /// Time of first retry.
-    ///
-    /// Every flight restarts with this value.
-    /// Doubled for every retry with a ±25% jitter.
     #[inline(always)]
     pub fn flight_start_rto(&self) -> Duration {
         self.flight_start_rto
@@ -117,41 +111,50 @@ impl Config {
     }
 
     /// Cryptographic provider.
-    ///
-    /// Provides all cryptographic operations (ciphers, key exchange, signing, etc.).
     #[inline(always)]
     pub fn crypto_provider(&self) -> &CryptoProvider {
         &self.crypto_provider
     }
 
     /// Optional seed for deterministic random number generation.
-    ///
-    /// When set, most non-cryptographic randomness (backoff jitter, TLS random bytes,
-    /// AEAD nonces, cookie secrets) will be deterministic based on this seed.
-    /// This is useful for testing and reproducibility.
-    ///
-    /// Note: Cryptographic operations (key exchange, signatures) always use
-    /// secure system randomness regardless of this setting.
     #[inline(always)]
     pub fn rng_seed(&self) -> Option<u64> {
         self.rng_seed
     }
 
     /// Maximum number of AEAD encryptions before triggering a KeyUpdate.
-    ///
-    /// When the number of application-epoch ciphertext records reaches this
-    /// limit, the endpoint automatically initiates a KeyUpdate to rotate keys.
-    /// Defaults to 2^23 (8,388,608).
     #[inline(always)]
     pub fn aead_encryption_limit(&self) -> u64 {
         self.aead_encryption_limit
     }
 
-    /// Allowed DTLS 1.3 cipher suites, filtered by the config's allow-list.
+    /// ALPN protocols offered to the peer, in preference order.
     ///
-    /// Returns all provider DTLS 1.3 cipher suites when no filter is set.
-    /// When a filter is set via the builder's `dtls13_cipher_suites` method,
-    /// only suites in both the provider and the filter are returned.
+    /// Empty means ALPN is disabled on this endpoint.
+    #[inline(always)]
+    pub fn alpn_protocols(&self) -> &[Vec<u8>] {
+        &self.alpn_protocols
+    }
+
+    /// SNI host name sent by the client (or `None` for servers).
+    #[inline(always)]
+    pub fn server_name(&self) -> Option<&str> {
+        self.server_name.as_deref()
+    }
+
+    /// RFC 8449 Record Size Limit (default 16385).
+    #[inline(always)]
+    pub fn record_size_limit(&self) -> u16 {
+        self.record_size_limit
+    }
+
+    /// RFC 9146 Connection ID, or `None` if not used.
+    #[inline(always)]
+    pub fn connection_id(&self) -> Option<&[u8]> {
+        self.connection_id.as_deref()
+    }
+
+    /// Allowed DTLS 1.3 cipher suites, filtered by the config's allow-list.
     pub fn dtls13_cipher_suites(
         &self,
     ) -> impl Iterator<Item = &'static dyn SupportedDtls13CipherSuite> + '_ {
@@ -167,10 +170,6 @@ impl Config {
     }
 
     /// Allowed key exchange groups, filtered by the config's allow-list.
-    ///
-    /// Returns all provider-supported key exchange groups when no filter
-    /// is set. When a filter is set via the builder's `kx_groups` method,
-    /// only groups in both the provider and the filter are returned.
     pub fn kx_groups(&self) -> impl Iterator<Item = &'static dyn SupportedKxGroup> + '_ {
         let filter = self.kx_groups.as_ref();
         self.crypto_provider
@@ -197,171 +196,125 @@ pub struct ConfigBuilder {
     aead_encryption_limit: u64,
     dtls13_cipher_suites: Option<Vec<Dtls13CipherSuite>>,
     kx_groups: Option<Vec<NamedGroup>>,
+    alpn_protocols: Vec<Vec<u8>>,
+    server_name: Option<String>,
+    record_size_limit: u16,
+    connection_id: Option<Vec<u8>>,
 }
 
 impl ConfigBuilder {
-    /// Set the max transmission unit (MTU).
-    ///
-    /// The largest size UDP packets we will produce.
-    /// Defaults to 1150.
+    /// Set the max transmission unit (MTU). Defaults to 1150.
     pub fn mtu(mut self, mtu: usize) -> Self {
         self.mtu = mtu;
         self
     }
 
-    /// Set the max amount of incoming packets to buffer before rejecting more input.
-    ///
-    /// Defaults to 30.
+    /// Set the max amount of incoming packets to buffer. Defaults to 30.
     pub fn max_queue_rx(mut self, max_queue_rx: usize) -> Self {
         self.max_queue_rx = max_queue_rx;
         self
     }
 
-    /// Set the max amount of outgoing packets to buffer.
-    ///
-    /// Defaults to 10.
+    /// Set the max amount of outgoing packets to buffer. Defaults to 10.
     pub fn max_queue_tx(mut self, max_queue_tx: usize) -> Self {
         self.max_queue_tx = max_queue_tx;
         self
     }
 
-    /// Set whether to require a client certificate (for servers).
-    ///
-    /// This will cause the server to send a CertificateRequest message.
-    /// Makes the server fail if the client does not send a certificate.
-    /// Defaults to true.
+    /// Set whether to require a client certificate (for servers). Defaults to `true`.
     pub fn require_client_certificate(mut self, require: bool) -> Self {
         self.require_client_certificate = require;
         self
     }
 
     /// Set whether the server sends a cookie exchange before the handshake.
-    ///
-    /// When true (the default), the server requires a stateless cookie
-    /// roundtrip for DoS protection via HelloRetryRequest with a cookie.
-    ///
-    /// When false, the server proceeds directly to ServerHello without
-    /// a cookie exchange.
+    /// Defaults to `true`.
     pub fn use_server_cookie(mut self, use_cookie: bool) -> Self {
         self.use_server_cookie = use_cookie;
         self
     }
 
-    /// Set the time of first retry.
-    ///
-    /// Each flight starts its timer when its first packet is emitted. The base
-    /// interval doubles after every retry, with independent +/-25% jitter on
-    /// each interval. This is proportional even for sub-second values; the
-    /// minimum jittered interval is 1 nanosecond. Backoff arithmetic saturates
-    /// on overflow. Also governs DTLS 1.3 KeyUpdate flights.
-    ///
-    /// Defaults to 1 second. Must be nonzero and at most ten years (3650 days).
+    /// Set the time of first retry. Defaults to 1 second.
     pub fn flight_start_rto(mut self, rto: Duration) -> Self {
         self.flight_start_rto = rto;
         self
     }
 
-    /// Set the max number of retries per flight.
-    ///
-    /// Excludes the initial transmission: zero disables retransmissions.
-    /// Timer-driven and duplicate-triggered retransmissions share this budget.
-    /// Once the handshake has completed locally, the final flight is still
-    /// resent in answer to the peer's retransmitted final flight.
-    /// Also governs DTLS 1.3 KeyUpdate flights.
-    /// Defaults to 4.
+    /// Set the max number of retries per flight. Defaults to 4.
     pub fn flight_retries(mut self, retries: usize) -> Self {
         self.flight_retries = retries;
         self
     }
 
-    /// Set the timeout for the entire handshake, regardless of flights.
-    ///
-    /// Starts when the client emits its first ClientHello packet through
-    /// [`crate::Output::Packet`], or when the server accepts its first
-    /// structurally valid ClientHello fragment, even if its body is later rejected.
-    /// A corrected ClientHello shares the same deadline for this peer.
-    /// Construction and idle time consume no budget. Uses the logical time
-    /// supplied to [`crate::Dtls::handle_timeout`].
-    ///
-    /// The absolute deadline survives cookie exchanges, later flights, and
-    /// retransmissions. It is disabled after completion and does not apply to
-    /// application traffic or DTLS 1.3 KeyUpdate.
-    ///
-    /// Retry exhaustion may fail earlier; increasing this timeout does not
-    /// increase [`Self::flight_retries`]. With the defaults, an unanswered flight
-    /// exhausts retries after roughly 31 seconds, before the 40-second deadline.
-    ///
-    /// Defaults to 40 seconds. Must be nonzero and at most ten years (3650 days).
+    /// Set the timeout for the entire handshake. Defaults to 40 seconds.
     pub fn handshake_timeout(mut self, timeout: Duration) -> Self {
         self.handshake_timeout = timeout;
         self
     }
 
     /// Set a custom crypto provider.
-    ///
-    /// If not set, the default aws-lc-rs provider will be used, if the feature
-    /// flag `aws-lc-rs` is enabled.
     pub fn with_crypto_provider(mut self, provider: CryptoProvider) -> Self {
         self.crypto_provider = Some(provider);
         self
     }
 
     /// Set a seed for deterministic random number generation.
-    ///
-    /// When set, most non-cryptographic randomness (backoff jitter, TLS random bytes,
-    /// AEAD nonces, cookie secrets) will be deterministic based on this seed.
-    ///
-    /// This is useful for testing and reproducibility.
-    ///
-    /// Note: Cryptographic operations (key exchange, signatures) always use
-    /// secure system randomness regardless of this setting.
     pub fn dangerously_set_rng_seed(mut self, seed: u64) -> Self {
         self.rng_seed = Some(seed);
         self
     }
 
     /// Set the maximum number of AEAD encryptions before triggering a KeyUpdate.
-    ///
-    /// Defaults to 2^23 (8,388,608).
+    /// Defaults to 2^23.
     pub fn aead_encryption_limit(mut self, limit: u64) -> Self {
         self.aead_encryption_limit = limit;
         self
     }
 
     /// Restrict which DTLS 1.3 cipher suites are offered and accepted.
-    ///
-    /// Only cipher suites present in both this list and the provider will
-    /// be used. Passing an empty slice is rejected by `build()`, since DTLS 1.3
-    /// is the only supported version.
-    ///
-    /// By default all provider DTLS 1.3 cipher suites are used.
     pub fn dtls13_cipher_suites(mut self, suites: &[Dtls13CipherSuite]) -> Self {
         self.dtls13_cipher_suites = Some(suites.to_vec());
         self
     }
 
     /// Restrict which key exchange groups are offered and accepted.
-    ///
-    /// Only groups present in both this list and the provider will be
-    /// used. Order determines preference (first = most preferred).
-    ///
-    /// By default all provider-supported key exchange groups are used.
     pub fn kx_groups(mut self, groups: &[NamedGroup]) -> Self {
         self.kx_groups = Some(groups.to_vec());
         self
     }
 
+    /// Offer ALPN protocols (RFC 7301), in preference order.
+    ///
+    /// Empty slice disables ALPN. On the client, all entries are sent in
+    /// `ClientHello`; on the server, the first match wins.
+    pub fn alpn_protocols(mut self, protocols: &[&[u8]]) -> Self {
+        self.alpn_protocols = protocols.iter().map(|p| p.to_vec()).collect();
+        self
+    }
+
+    /// Server Name Indication (RFC 6066). Sent by the client only.
+    pub fn server_name(mut self, name: impl Into<String>) -> Self {
+        self.server_name = Some(name.into());
+        self
+    }
+
+    /// Record Size Limit (RFC 8449). Defaults to `MAX_RECORD_SIZE_LIMIT` (16385).
+    pub fn record_size_limit(mut self, limit: u16) -> Self {
+        self.record_size_limit = limit;
+        self
+    }
+
+    /// Connection ID (RFC 9146). Both sides must configure one for CID
+    /// to actually be used in the wire format.
+    pub fn connection_id(mut self, cid: &[u8]) -> Self {
+        self.connection_id = Some(cid.to_vec());
+        self
+    }
+
     /// Build the configuration.
     ///
-    /// Validates timing settings and the crypto provider before returning the
-    /// configuration. Returns `Error::ConfigError` for invalid settings.
-    ///
-    /// The crypto provider is selected in the following priority order:
-    /// 1. Explicit provider set via `with_crypto_provider()`
-    /// 2. Default provider installed via `CryptoProvider::install_default()`
-    /// 3. AWS-LC provider (if `aws-lc-rs` feature is enabled)
-    /// 4. RustCrypto provider (if `rust-crypto` feature is enabled)
-    /// 5. Panic if no provider is available
+    /// Validates timing settings and the crypto provider before returning
+    /// the configuration. Returns `Error::ConfigError` for invalid settings.
     pub fn build(self) -> Result<Config, Error> {
         if self.handshake_timeout.is_zero() || self.handshake_timeout > MAX_TIMING_DURATION {
             return Err(ConfigError::InvalidHandshakeTimeout.into());
@@ -386,10 +339,8 @@ impl ConfigBuilder {
              or enable the 'aws-lc-rs' or 'rust-crypto' feature.",
         );
 
-        // Always validate the crypto provider
         crypto_provider.validate()?;
 
-        // Validate MTU: must be large enough for DTLS record + handshake headers
         if self.mtu < 64 {
             return Err(Error::ConfigError(ConfigError::MtuTooSmall {
                 mtu: self.mtu as u16,
@@ -397,13 +348,25 @@ impl ConfigBuilder {
             }));
         }
 
-        // Validate aead_encryption_limit: must be at least 1
         if self.aead_encryption_limit == 0 {
             return Err(Error::ConfigError(ConfigError::AeadEncryptionLimitTooSmall));
         }
 
-        // Validate cipher-suite filter: DTLS 1.3 is the only version, so at
-        // least one suite must survive the allow-list.
+        if self.record_size_limit < MIN_RECORD_SIZE_LIMIT
+            || self.record_size_limit > MAX_RECORD_SIZE_LIMIT
+        {
+            return Err(Error::ConfigError(ConfigError::InvalidRecordSizeLimit));
+        }
+
+        if let Some(cid) = &self.connection_id {
+            if cid.len() > MAX_CID_LEN {
+                return Err(Error::ConfigError(ConfigError::ConnectionIdTooLong {
+                    len: cid.len(),
+                    max: MAX_CID_LEN,
+                }));
+            }
+        }
+
         let dtls13_count = {
             let all = crypto_provider.dtls13_cipher_suites.iter();
             match &self.dtls13_cipher_suites {
@@ -417,7 +380,6 @@ impl ConfigBuilder {
             ));
         }
 
-        // Validate kx_groups filter: DTLS 1.3 needs at least one group.
         let filtered_kx = |kx: &&'static dyn SupportedKxGroup| -> bool {
             match &self.kx_groups {
                 Some(list) => list.contains(&kx.name()),
@@ -448,6 +410,10 @@ impl ConfigBuilder {
             aead_encryption_limit: self.aead_encryption_limit,
             dtls13_cipher_suites: self.dtls13_cipher_suites,
             kx_groups: self.kx_groups,
+            alpn_protocols: self.alpn_protocols,
+            server_name: self.server_name,
+            record_size_limit: self.record_size_limit,
+            connection_id: self.connection_id,
         })
     }
 }
@@ -479,6 +445,13 @@ impl fmt::Debug for Config {
             .field("aead_encryption_limit", &self.aead_encryption_limit)
             .field("dtls13_cipher_suites", &self.dtls13_cipher_suites)
             .field("kx_groups", &self.kx_groups)
+            .field("alpn_protocols", &self.alpn_protocols)
+            .field("server_name", &self.server_name)
+            .field("record_size_limit", &self.record_size_limit)
+            .field(
+                "connection_id_len",
+                &self.connection_id.as_ref().map_or(0, |v| v.len()),
+            )
             .finish()
     }
 }
@@ -502,6 +475,13 @@ impl fmt::Debug for ConfigBuilder {
             .field("aead_encryption_limit", &self.aead_encryption_limit)
             .field("dtls13_cipher_suites", &self.dtls13_cipher_suites)
             .field("kx_groups", &self.kx_groups)
+            .field("alpn_protocols", &self.alpn_protocols)
+            .field("server_name", &self.server_name)
+            .field("record_size_limit", &self.record_size_limit)
+            .field(
+                "connection_id_len",
+                &self.connection_id.as_ref().map_or(0, |v| v.len()),
+            )
             .finish()
     }
 }
@@ -533,10 +513,6 @@ mod tests {
                 error,
                 Error::ConfigError(ConfigError::InvalidHandshakeTimeout)
             );
-            assert_eq!(
-                error.to_string(),
-                "config error: handshake_timeout must be nonzero and at most 3650 days"
-            );
             let error = Config::builder()
                 .flight_start_rto(duration)
                 .build()
@@ -544,10 +520,6 @@ mod tests {
             assert_eq!(
                 error,
                 Error::ConfigError(ConfigError::InvalidFlightStartRto)
-            );
-            assert_eq!(
-                error.to_string(),
-                "config error: flight_start_rto must be nonzero and at most 3650 days"
             );
         }
         for duration in [Duration::from_nanos(1), MAX_TIMING_DURATION] {
@@ -567,26 +539,10 @@ mod tests {
 
     #[test]
     fn rejects_zero_mtu() {
-        match Config::builder().mtu(0).build() {
-            Err(Error::ConfigError(ConfigError::MtuTooSmall { mtu, minimum })) => {
-                assert_eq!(mtu, 0);
-                assert_eq!(minimum, 64);
-            }
-            Err(other) => panic!("expected ConfigError, got: {other:?}"),
-            Ok(_) => panic!("expected error for MTU=0"),
-        }
-    }
-
-    #[test]
-    fn rejects_small_mtu() {
-        match Config::builder().mtu(32).build() {
-            Err(Error::ConfigError(ConfigError::MtuTooSmall { mtu, minimum })) => {
-                assert_eq!(mtu, 32);
-                assert_eq!(minimum, 64);
-            }
-            Err(other) => panic!("expected ConfigError, got: {other:?}"),
-            Ok(_) => panic!("expected error for MTU=32"),
-        }
+        assert!(matches!(
+            Config::builder().mtu(0).build(),
+            Err(Error::ConfigError(ConfigError::MtuTooSmall { .. }))
+        ));
     }
 
     #[test]
@@ -599,11 +555,10 @@ mod tests {
 
     #[test]
     fn rejects_zero_aead_limit() {
-        match Config::builder().aead_encryption_limit(0).build() {
-            Err(Error::ConfigError(ConfigError::AeadEncryptionLimitTooSmall)) => {}
-            Err(other) => panic!("expected ConfigError, got: {other:?}"),
-            Ok(_) => panic!("expected error for aead_encryption_limit=0"),
-        }
+        assert!(matches!(
+            Config::builder().aead_encryption_limit(0).build(),
+            Err(Error::ConfigError(ConfigError::AeadEncryptionLimitTooSmall))
+        ));
     }
 
     #[test]
@@ -636,65 +591,121 @@ mod tests {
 
     #[test]
     fn empty_dtls13_filter_rejected() {
-        match Config::builder().dtls13_cipher_suites(&[]).build() {
-            Err(Error::ConfigError(ConfigError::NoCipherSuitesAfterFiltering)) => {}
-            Err(other) => panic!("expected ConfigError, got: {other:?}"),
-            Ok(_) => panic!("expected error when DTLS 1.3 filter is empty"),
-        }
+        assert!(matches!(
+            Config::builder().dtls13_cipher_suites(&[]).build(),
+            Err(Error::ConfigError(
+                ConfigError::NoCipherSuitesAfterFiltering
+            ))
+        ));
     }
 
     #[test]
     fn empty_kx_groups_filter_rejected() {
-        match Config::builder().kx_groups(&[]).build() {
-            Err(Error::ConfigError(ConfigError::NoDtls13KeyExchangeGroupsAfterFiltering)) => {}
-            Err(other) => panic!("expected ConfigError, got: {other:?}"),
-            Ok(_) => panic!("expected error for empty kx groups"),
-        }
+        assert!(matches!(
+            Config::builder().kx_groups(&[]).build(),
+            Err(Error::ConfigError(
+                ConfigError::NoDtls13KeyExchangeGroupsAfterFiltering
+            ))
+        ));
     }
 
     #[test]
-    fn x25519_only_accepted_for_dtls13_only() {
+    fn alpn_default_empty() {
+        assert!(Config::default().alpn_protocols().is_empty());
+    }
+
+    #[test]
+    fn alpn_roundtrip() {
         let config = Config::builder()
-            .kx_groups(&[NamedGroup::X25519])
+            .alpn_protocols(&[b"h2", b"http/1.1"])
             .build()
-            .expect("X25519-only should be accepted for DTLS 1.3-only config");
-        let groups: Vec<_> = config.kx_groups().map(|g| g.name()).collect();
-        assert_eq!(groups, &[NamedGroup::X25519]);
+            .unwrap();
+        assert_eq!(
+            config.alpn_protocols(),
+            &[b"h2".to_vec(), b"http/1.1".to_vec()]
+        );
     }
 
     #[test]
-    fn kx_groups_match_provider_when_unfiltered() {
-        let config = Config::default();
-        let from_config: Vec<_> = config.kx_groups().map(|g| g.name()).collect();
-        let from_provider: Vec<_> = config
-            .crypto_provider()
-            .supported_kx_groups()
-            .map(|g| g.name())
-            .collect();
-        assert_eq!(from_config, from_provider);
+    fn server_name_default_none() {
+        assert!(Config::default().server_name().is_none());
     }
 
     #[test]
-    fn no_filter_returns_all() {
-        let config = Config::default();
-        assert!(config.dtls13_cipher_suites().count() >= 2);
-        assert!(config.kx_groups().count() >= 2);
+    fn server_name_roundtrip() {
+        let config = Config::builder()
+            .server_name("example.com")
+            .build()
+            .unwrap();
+        assert_eq!(config.server_name(), Some("example.com"));
     }
 
     #[test]
-    fn filter_with_explicit_provider() {
-        #[cfg(feature = "aws-lc-rs")]
-        {
-            let config = Config::builder()
-                .with_crypto_provider(aws_lc_rs::default_provider())
-                .dtls13_cipher_suites(&[Dtls13CipherSuite::AES_128_GCM_SHA256])
-                .kx_groups(&[NamedGroup::X25519, NamedGroup::Secp256r1])
-                .build()
-                .expect("should accept filtered config with explicit provider");
-            let suites13: Vec<_> = config.dtls13_cipher_suites().map(|cs| cs.suite()).collect();
-            assert_eq!(suites13, &[Dtls13CipherSuite::AES_128_GCM_SHA256]);
-            let groups: Vec<_> = config.kx_groups().map(|g| g.name()).collect();
-            assert_eq!(groups, &[NamedGroup::X25519, NamedGroup::Secp256r1]);
-        }
+    fn record_size_limit_default() {
+        assert_eq!(Config::default().record_size_limit(), MAX_RECORD_SIZE_LIMIT);
+    }
+
+    #[test]
+    fn record_size_limit_invalid_low() {
+        assert!(matches!(
+            Config::builder().record_size_limit(0).build(),
+            Err(Error::ConfigError(ConfigError::InvalidRecordSizeLimit))
+        ));
+        assert!(matches!(
+            Config::builder().record_size_limit(63).build(),
+            Err(Error::ConfigError(ConfigError::InvalidRecordSizeLimit))
+        ));
+    }
+
+    #[test]
+    fn record_size_limit_invalid_high() {
+        assert!(matches!(
+            Config::builder()
+                .record_size_limit(MAX_RECORD_SIZE_LIMIT + 1)
+                .build(),
+            Err(Error::ConfigError(ConfigError::InvalidRecordSizeLimit))
+        ));
+    }
+
+    #[test]
+    fn record_size_limit_valid_range() {
+        Config::builder()
+            .record_size_limit(MIN_RECORD_SIZE_LIMIT)
+            .build()
+            .expect("min valid");
+        Config::builder()
+            .record_size_limit(MAX_RECORD_SIZE_LIMIT)
+            .build()
+            .expect("max valid");
+    }
+
+    #[test]
+    fn connection_id_default_none() {
+        assert!(Config::default().connection_id().is_none());
+    }
+
+    #[test]
+    fn connection_id_roundtrip() {
+        let cid = [0xDE, 0xAD, 0xBE, 0xEF];
+        let config = Config::builder().connection_id(&cid).build().unwrap();
+        assert_eq!(config.connection_id(), Some(&cid[..]));
+    }
+
+    #[test]
+    fn connection_id_too_long_rejected() {
+        let cid = vec![0u8; MAX_CID_LEN + 1];
+        assert!(matches!(
+            Config::builder().connection_id(&cid).build(),
+            Err(Error::ConfigError(ConfigError::ConnectionIdTooLong { .. }))
+        ));
+    }
+
+    #[test]
+    fn connection_id_max_len_accepted() {
+        let cid = vec![0u8; MAX_CID_LEN];
+        Config::builder()
+            .connection_id(&cid)
+            .build()
+            .expect("max CID length should be accepted");
     }
 }

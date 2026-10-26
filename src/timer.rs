@@ -47,10 +47,12 @@ impl HandshakeTimers {
         }
     }
 
+    #[allow(dead_code)]
     pub fn handshake_deadline(&self) -> Timeout {
         self.handshake
     }
 
+    #[allow(dead_code)]
     pub fn set_handshake_deadline(&mut self, timeout: Timeout) {
         self.handshake = timeout;
     }

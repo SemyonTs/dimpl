@@ -170,6 +170,12 @@ pub struct Engine {
 
     /// Whether [`Output::CloseNotify`] has already been emitted.
     close_notify_reported: bool,
+
+    negotiated_alpn: Option<Buf>,
+    peer_server_name: Option<Buf>,
+    peer_record_size_limit: Option<u16>,
+    local_cid: Option<Buf>,
+    peer_cid: Option<Buf>,
 }
 
 struct EpochKeys {
@@ -261,9 +267,15 @@ impl Engine {
             key_update_in_flight: false,
             close_notify_sequence: None,
             close_notify_reported: false,
+            negotiated_alpn: None,
+            peer_server_name: None,
+            peer_record_size_limit: None,
+            local_cid: None,
+            peer_cid: None,
         }
     }
 
+    #[allow(dead_code)]
     pub fn into_fallback(self) -> (Arc<Config>, DtlsCertificate, Timeout) {
         (
             self.config,
@@ -289,6 +301,7 @@ impl Engine {
     /// and bumps the epoch-0 record sequence so subsequent records don't
     /// collide.  Does **not** enqueue the record for output — the hybrid
     /// CH was already transmitted. Retains its outstanding retry state.
+    #[allow(dead_code)]
     pub fn inject_hybrid_client_hello(
         &mut self,
         transcript_bytes: &[u8],
@@ -367,6 +380,59 @@ impl Engine {
 
     pub fn signing_key(&mut self) -> &mut dyn SigningKey {
         &mut *self.signing_key
+    }
+
+    pub fn negotiated_alpn(&self) -> Option<&[u8]> {
+        self.negotiated_alpn.as_deref()
+    }
+    pub fn set_negotiated_alpn(&mut self, alpn: Option<&[u8]>) {
+        self.negotiated_alpn = alpn.map(|s| {
+            let mut b = self.buffers_free.pop();
+            b.clear();
+            b.extend_from_slice(s);
+            b
+        });
+    }
+    pub fn peer_server_name(&self) -> Option<&[u8]> {
+        self.peer_server_name.as_deref()
+    }
+    pub fn set_peer_server_name(&mut self, name: Option<&[u8]>) {
+        self.peer_server_name = name.map(|s| {
+            let mut b = self.buffers_free.pop();
+            b.clear();
+            b.extend_from_slice(s);
+            b
+        });
+    }
+    #[allow(dead_code)]
+    pub fn peer_record_size_limit(&self) -> Option<u16> {
+        self.peer_record_size_limit
+    }
+    pub fn set_peer_record_size_limit(&mut self, limit: Option<u16>) {
+        self.peer_record_size_limit = limit;
+    }
+    pub fn local_cid(&self) -> Option<&[u8]> {
+        self.local_cid.as_deref()
+    }
+    pub fn set_local_cid(&mut self, cid: Option<&[u8]>) {
+        self.local_cid = cid.map(|s| {
+            let mut b = self.buffers_free.pop();
+            b.clear();
+            b.extend_from_slice(s);
+            b
+        });
+    }
+    #[allow(dead_code)]
+    pub fn peer_cid(&self) -> Option<&[u8]> {
+        self.peer_cid.as_deref()
+    }
+    pub fn set_peer_cid(&mut self, cid: Option<&[u8]>) {
+        self.peer_cid = cid.map(|s| {
+            let mut b = self.buffers_free.pop();
+            b.clear();
+            b.extend_from_slice(s);
+            b
+        });
     }
 
     /// Unconsumed records for protocol-state validation.
@@ -1090,20 +1156,26 @@ impl Engine {
 
         // Build the unified header for AAD
         // Always use S=1 (2-byte seq) and L=1 (length present)
+        let cid = self.peer_cid.as_deref();
+        let cid_len = cid.map_or(0, |c| c.len());
+        let c_flag: u8 = if cid_len > 0 { 0b0001_0000 } else { 0 };
         let epoch_bits = (epoch & 0x03) as u8;
-        let flags: u8 = 0b0010_0000
-            | 0b0000_1000 // S=1
-            | 0b0000_0100 // L=1
-            | epoch_bits;
+        let flags: u8 = 0b0010_0000 | c_flag | 0b0000_1000 | 0b0000_0100 | epoch_bits;
+        let header_len = 1 + cid_len + 2 + 2;
+        let seq_off = 1 + cid_len;
 
         let ciphertext_len = fragment.len() + tag_len;
 
-        let mut header_buf = [0u8; 5];
+        let mut header_buf = [0u8; 32];
         header_buf[0] = flags;
-        header_buf[1..3].copy_from_slice(&(seq as u16).to_be_bytes());
-        header_buf[3..5].copy_from_slice(&(ciphertext_len as u16).to_be_bytes());
+        if let Some(cid) = cid {
+            header_buf[1..1 + cid_len].copy_from_slice(cid);
+        }
+        header_buf[seq_off..seq_off + 2].copy_from_slice(&(seq as u16).to_be_bytes());
+        header_buf[seq_off + 2..seq_off + 4]
+            .copy_from_slice(&(ciphertext_len as u16).to_be_bytes());
 
-        let aad = Aad::new_dtls13(&header_buf);
+        let aad = Aad::new_dtls13(&header_buf[..header_len]);
 
         // Save sn_key before losing mutable borrow of keys
         let mut sn_key = [0u8; 32];
@@ -1127,7 +1199,7 @@ impl Engine {
         };
 
         // Unified header: flags(1) + seq(2) + length(2) = 5 bytes
-        let record_wire_len = 5 + fragment.len();
+        let record_wire_len = header_len + fragment.len();
 
         let can_append = !self.datagram_sealed
             && self
@@ -1144,17 +1216,6 @@ impl Engine {
             );
             return Err(Error::TransmitQueueFull);
         }
-
-        // Build the record for serialization
-        let record = Dtls13Record {
-            content_type: ContentType::ApplicationData,
-            sequence: Sequence {
-                epoch,
-                sequence_number: seq,
-            },
-            length: fragment.len() as u16,
-            fragment_range: 0..fragment.len(),
-        };
 
         // Increment send sequence, guarding against 48-bit overflow (RFC 9147 §4.2)
         if epoch == 2 {
@@ -1190,20 +1251,19 @@ impl Engine {
 
         if can_append {
             let last = self.queue_tx.back_mut().unwrap();
-            let header_start = last.len();
-            record.serialize(&fragment, last);
-            // Apply record number encryption: XOR mask over seq bytes
-            // Seq bytes are at offset header_start+1..header_start+3
-            last[header_start + 1] ^= sn_mask[0];
-            last[header_start + 2] ^= sn_mask[1];
+            let start = last.len();
+            last.extend_from_slice(&header_buf[..header_len]);
+            last.extend_from_slice(&fragment);
+            last[start + seq_off] ^= sn_mask[0];
+            last[start + seq_off + 1] ^= sn_mask[1];
         } else {
             self.datagram_sealed = false;
             let mut buffer = self.buffers_free.pop();
             buffer.clear();
-            record.serialize(&fragment, &mut buffer);
-            // Apply record number encryption: XOR mask over seq bytes
-            buffer[1] ^= sn_mask[0];
-            buffer[2] ^= sn_mask[1];
+            buffer.extend_from_slice(&header_buf[..header_len]);
+            buffer.extend_from_slice(&fragment);
+            buffer[seq_off] ^= sn_mask[0];
+            buffer[seq_off + 1] ^= sn_mask[1];
             self.queue_tx.push_back(buffer);
         }
 
@@ -1252,6 +1312,10 @@ impl Engine {
         // content type (the DTLS 1.3 record protection layer's expansion).
         let protection_overhead = if epoch >= 2 { tag_len + 1 } else { 0 };
 
+        let rsl_body_limit = self.peer_record_size_limit.map_or(usize::MAX, |rsl| {
+            (rsl as usize).saturating_sub(handshake_header_len + 1)
+        });
+
         while offset < total_len || (total_len == 0 && offset == 0) {
             let already_used_in_current = self.queue_tx.back().map(|b| b.len()).unwrap_or(0);
             let available_in_current = self.config.mtu().saturating_sub(already_used_in_current);
@@ -1259,7 +1323,7 @@ impl Engine {
             let record_header_len = if epoch == 0 {
                 Dtls13Record::PLAINTEXT_HEADER_LEN
             } else {
-                5 // unified header: flags(1) + seq(2) + length(2)
+                5 + self.peer_cid.as_ref().map_or(0, |c| c.len())
             };
 
             let fixed_overhead = record_header_len + handshake_header_len + protection_overhead;
@@ -1275,7 +1339,9 @@ impl Engine {
             let chunk_len = if total_len == 0 {
                 0
             } else {
-                remaining_body_bytes.min(available_for_body)
+                remaining_body_bytes
+                    .min(available_for_body)
+                    .min(rsl_body_limit)
             };
 
             let frag_range = if chunk_len == 0 {
@@ -2427,6 +2493,10 @@ impl RecordHandler for Engine {
         Engine::push_buffer(self, buffer);
     }
 
+    fn local_connection_id(&self) -> Option<&[u8]> {
+        self.local_cid.as_deref()
+    }
+
     fn classify_record(&mut self, mut record: Record) -> Result<Option<Record>, Error> {
         if let Some(cn_seq) = self.close_notify_sequence {
             if record.record().sequence > cn_seq {
@@ -2747,6 +2817,10 @@ mod tests {
 
         fn push_buffer(&mut self, buffer: Buf) {
             self.buffers.push(buffer);
+        }
+
+        fn local_connection_id(&self) -> Option<&[u8]> {
+            None
         }
 
         fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {

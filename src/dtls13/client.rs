@@ -48,6 +48,7 @@ use crate::dtls13::message::MessageType;
 use crate::dtls13::message::NamedGroup;
 use crate::dtls13::message::ProtocolVersion;
 use crate::dtls13::message::Random;
+use crate::dtls13::message::RecordSizeLimit;
 use crate::dtls13::message::SessionId;
 use crate::dtls13::message::SignatureAlgorithmsExtension;
 use crate::dtls13::message::SignatureScheme;
@@ -162,6 +163,10 @@ impl Client {
 
     pub fn into_server(self) -> Server {
         Server::new_with_engine(self.engine, self.last_now, false)
+    }
+
+    pub fn negotiated_alpn(&self) -> Option<&[u8]> {
+        self.engine.negotiated_alpn()
     }
 
     pub(crate) fn state_name(&self) -> &'static str {
@@ -555,6 +560,17 @@ impl State {
         client.engine.set_cipher_suite(cs);
         client.session_id = Some(server_hello.legacy_session_id);
 
+        match server_hello.connection_id() {
+            Some(cid_ext) => {
+                let peer_cid = cid_ext.cid(&client.defragment_buffer).to_vec();
+                client.engine.set_peer_cid(Some(&peer_cid));
+            }
+            None => {
+                client.engine.set_local_cid(None);
+                client.engine.set_peer_cid(None);
+            }
+        }
+
         if server_hello.extensions.is_none() {
             return Err(Error::IncompleteServerHello.into());
         }
@@ -632,6 +648,16 @@ impl State {
 
         if let Some(profile) = ee.srtp_profiles().and_then(|profiles| profiles.first()) {
             client.negotiated_srtp_profile = Some((*profile).into());
+        }
+
+        if let Some(alpn) = ee.alpn() {
+            if let Some(proto) = alpn.get(0, &client.defragment_buffer) {
+                let proto = proto.to_vec();
+                client.engine.set_negotiated_alpn(Some(&proto));
+            }
+        }
+        if let Some(rsl) = ee.record_size_limit() {
+            client.engine.set_peer_record_size_limit(Some(rsl.limit));
         }
 
         client.engine.advance_peer_handshake_seq();
@@ -1158,7 +1184,7 @@ fn handshake_create_client_hello(
     compression_methods.push(CompressionMethod::Null);
 
     // Build extensions
-    let mut extensions: ArrayVec<Extension, 8> = ArrayVec::new();
+    let mut extensions: ArrayVec<Extension, 12> = ArrayVec::new();
     let mut ext_buf = Buf::new();
 
     // 1. supported_versions extension (DTLS 1.3)
@@ -1228,6 +1254,57 @@ fn handshake_create_client_hello(
         extensions.push(Extension {
             extension_type: ExtensionType::Cookie,
             extension_data_range: cookie_start..cookie_end,
+        });
+    }
+
+    if let Some(name) = engine.config().server_name() {
+        let sn_start = ext_buf.len();
+        let name_bytes = name.as_bytes();
+        ext_buf.extend_from_slice(&((3 + name_bytes.len()) as u16).to_be_bytes());
+        ext_buf.push(0);
+        ext_buf.extend_from_slice(&(name_bytes.len() as u16).to_be_bytes());
+        ext_buf.extend_from_slice(name_bytes);
+        let sn_end = ext_buf.len();
+        extensions.push(Extension {
+            extension_type: ExtensionType::ServerName,
+            extension_data_range: sn_start..sn_end,
+        });
+    }
+
+    if !engine.config().alpn_protocols().is_empty() {
+        let alpn_start = ext_buf.len();
+        let protocols = engine.config().alpn_protocols();
+        let total: usize = protocols.iter().map(|p| 1 + p.len()).sum();
+        ext_buf.extend_from_slice(&(total as u16).to_be_bytes());
+        for p in protocols {
+            ext_buf.push(p.len() as u8);
+            ext_buf.extend_from_slice(p);
+        }
+        let alpn_end = ext_buf.len();
+        extensions.push(Extension {
+            extension_type: ExtensionType::ApplicationLayerProtocolNegotiation,
+            extension_data_range: alpn_start..alpn_end,
+        });
+    }
+
+    let rsl_val = engine.config().record_size_limit();
+    let rsl_start = ext_buf.len();
+    RecordSizeLimit { limit: rsl_val }.serialize(&mut ext_buf);
+    let rsl_end = ext_buf.len();
+    extensions.push(Extension {
+        extension_type: ExtensionType::RecordSizeLimit,
+        extension_data_range: rsl_start..rsl_end,
+    });
+
+    let local_cid_vec = engine.config().connection_id().map(|c| c.to_vec());
+    if let Some(ref cid) = local_cid_vec {
+        let cid_start = ext_buf.len();
+        ext_buf.push(cid.len() as u8);
+        ext_buf.extend_from_slice(cid);
+        let cid_end = ext_buf.len();
+        extensions.push(Extension {
+            extension_type: ExtensionType::ConnectionId,
+            extension_data_range: cid_start..cid_end,
         });
     }
 

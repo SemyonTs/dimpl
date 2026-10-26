@@ -5,8 +5,6 @@
 
 use arrayvec::ArrayVec;
 
-use crate::types::{ContentType, Sequence};
-
 /// Explicit nonce length for DTLS AEAD records.
 ///
 /// The explicit nonce is transmitted with each record.
@@ -48,76 +46,11 @@ pub fn plaintext_len_from_fragment_len(fragment_len: usize) -> Option<usize> {
     fragment_len.checked_sub(DTLS_AEAD_OVERHEAD)
 }
 
-/// Fixed IV portion for DTLS AEAD.
-///
-/// DTLS 1.2 uses:
-/// - AES-GCM: 4-byte fixed IV + 8-byte explicit nonce (per record)
-/// - ChaCha20-Poly1305: 12-byte fixed IV + 0-byte explicit nonce
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Iv {
-    bytes: [u8; 12],
-    len: u8,
-}
-
-impl Iv {
-    pub(crate) fn new(iv: &[u8]) -> Self {
-        assert!(
-            iv.len() <= 12,
-            "invalid IV length: expected <= 12, got {}",
-            iv.len()
-        );
-        let mut bytes = [0u8; 12];
-        bytes[..iv.len()].copy_from_slice(iv);
-        Self {
-            bytes,
-            len: iv.len() as u8,
-        }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.len as usize
-    }
-
-    pub(crate) fn as_slice(&self) -> &[u8] {
-        &self.bytes[..self.len()]
-    }
-
-    /// Returns the full 12-byte backing array.
-    ///
-    /// Only valid for 12-byte IVs (ChaCha20-Poly1305). For 4-byte IVs
-    /// (AES-GCM), use [`as_slice`] instead.
-    pub(crate) fn as_12_bytes(&self) -> &[u8; 12] {
-        assert_eq!(
-            self.len(),
-            12,
-            "as_12_bytes called on {}-byte IV",
-            self.len()
-        );
-        &self.bytes
-    }
-}
-
 /// Full AEAD nonce (fixed IV + explicit nonce).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Nonce(pub [u8; 12]);
 
 impl Nonce {
-    /// Create a new AEAD nonce by combining fixed IV and explicit nonce (DTLS 1.2).
-    pub(crate) fn new(iv: Iv, explicit_nonce: &[u8]) -> Self {
-        assert_eq!(
-            iv.len() + explicit_nonce.len(),
-            12,
-            "invalid DTLS 1.2 nonce parts: iv_len={}, explicit_nonce_len={}",
-            iv.len(),
-            explicit_nonce.len()
-        );
-        let mut nonce = [0u8; 12];
-        let iv_len = iv.len();
-        nonce[..iv_len].copy_from_slice(iv.as_slice());
-        nonce[iv_len..].copy_from_slice(explicit_nonce);
-        Self(nonce)
-    }
-
     /// Create a nonce by XORing the IV with the padded sequence number.
     ///
     /// Used by both DTLS 1.2 (ChaCha20-Poly1305) and DTLS 1.3:
@@ -138,42 +71,18 @@ impl Nonce {
 ///
 /// Variable-length to support both DTLS 1.2 (13 bytes) and DTLS 1.3 (3-5 bytes).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Aad(pub ArrayVec<u8, 13>);
+pub struct Aad(pub ArrayVec<u8, 32>);
 
 impl Aad {
-    /// Create Additional Authenticated Data for a DTLS 1.2 record.
-    pub(crate) fn new_dtls12(content_type: ContentType, sequence: Sequence, length: u16) -> Self {
-        let mut aad = ArrayVec::new();
-
-        // First set the full 8-byte sequence number
-        let seq_bytes = sequence.sequence_number.to_be_bytes();
-        aad.try_extend_from_slice(&seq_bytes).unwrap();
-
-        // Overwrite the first 2 bytes with epoch
-        let epoch_bytes = sequence.epoch.to_be_bytes();
-        aad[0] = epoch_bytes[0];
-        aad[1] = epoch_bytes[1];
-
-        // Content type at index 8
-        aad.push(content_type.as_u8());
-
-        // Protocol version bytes (major:minor) at indexes 9-10
-        aad.push(0xfe); // DTLS 1.2 major version
-        aad.push(0xfd); // DTLS 1.2 minor version
-
-        // Payload length (2 bytes) at indexes 11-12
-        aad.try_extend_from_slice(&length.to_be_bytes()).unwrap();
-
-        Aad(aad)
-    }
-
     /// Create Additional Authenticated Data for a DTLS 1.3 record.
     ///
-    /// The AAD is the raw unified header bytes (3-5 bytes).
+    /// The AAD is the raw unified header bytes (3-5 bytes without CID,
+    /// up to 5+27 with Connection ID negotiated via RFC 9146).
     pub(crate) fn new_dtls13(header_bytes: &[u8]) -> Self {
         let mut aad = ArrayVec::new();
-        // unwrap: header_bytes is at most 5 bytes, well within capacity 13
-        aad.try_extend_from_slice(header_bytes).unwrap();
+        // Capacity is 32; `header_bytes.len() <= 5 + MAX_CID_LEN = 32`.
+        aad.try_extend_from_slice(header_bytes)
+            .expect("DTLS 1.3 header exceeds AAD capacity");
         Aad(aad)
     }
 }

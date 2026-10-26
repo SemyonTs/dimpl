@@ -1,3 +1,4 @@
+use super::ConnectionId;
 use super::{CompressionMethod, Dtls13CipherSuite, Extension};
 use super::{ExtensionType, KeyShareHelloRetryRequest, KeyShareServerHello, NamedGroup};
 use super::{ProtocolVersion, Random, SessionId};
@@ -31,6 +32,7 @@ struct ParsedExtensions {
     selected_version: Option<ProtocolVersion>,
     key_share: Option<KeyShareServerHello>,
     retry_group: Option<NamedGroup>,
+    connection_id: Option<ConnectionId>,
 }
 
 impl ServerHello {
@@ -126,6 +128,10 @@ impl ServerHello {
                             ExtensionType::Cookie if random.bytes == HRR_RANDOM => {
                                 parse_cookie_extension(data)?;
                             }
+                            ExtensionType::ConnectionId => {
+                                parsed_extensions.connection_id =
+                                    Some(ConnectionId::parse(data, range.start)?.1);
+                            }
                             _ => {}
                         }
                         extensions_vec.try_push(ext).map_err(|_| {
@@ -164,6 +170,9 @@ impl ServerHello {
     }
     pub fn retry_group(&self) -> Option<NamedGroup> {
         self.parsed_extensions.retry_group
+    }
+    pub fn connection_id(&self) -> Option<&ConnectionId> {
+        self.parsed_extensions.connection_id.as_ref()
     }
 
     pub fn serialize(&self, source_buf: &[u8], output: &mut Buf) {
@@ -287,6 +296,10 @@ mod test {
                 ExtensionType::SignatureAlgorithms => &[0, 2, 4, 3],
                 ExtensionType::UseSrtp => &[0, 2, 0, 1, 0],
                 ExtensionType::Cookie => &[0, 1, 7],
+                ExtensionType::ServerName => &[0, 0],
+                ExtensionType::ApplicationLayerProtocolNegotiation => &[0, 3, 1, b'h', b'2'],
+                ExtensionType::RecordSizeLimit => &[0x40, 0x01],
+                ExtensionType::ConnectionId => &[0x01, 0xAA],
                 _ => unreachable!(),
             };
             extensions.extend_from_slice(&extension_type.as_u16().to_be_bytes());
@@ -306,5 +319,30 @@ mod test {
             ),
             "too many distinct supported extensions should fail with LengthValue"
         );
+    }
+
+    #[test]
+    fn connection_id_roundtrip() {
+        let mut body = MESSAGE[..39].to_vec();
+        let cid: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF];
+        let mut ext = Vec::new();
+        ext.extend_from_slice(&ExtensionType::ConnectionId.as_u16().to_be_bytes());
+        ext.extend_from_slice(&((1 + cid.len()) as u16).to_be_bytes());
+        ext.push(cid.len() as u8);
+        ext.extend_from_slice(cid);
+        body.extend_from_slice(&(ext.len() as u16).to_be_bytes());
+        body.extend_from_slice(&ext);
+
+        let (rest, parsed) = ServerHello::parse(&body, 0).unwrap();
+        assert!(rest.is_empty());
+        let got_cid = parsed
+            .connection_id()
+            .expect("CID extension retained")
+            .cid(&body);
+        assert_eq!(got_cid, cid);
+
+        let mut serialized = Buf::new();
+        parsed.serialize(&body, &mut serialized);
+        assert_eq!(&*serialized, &body[..]);
     }
 }

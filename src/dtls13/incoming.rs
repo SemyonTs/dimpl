@@ -24,6 +24,7 @@ impl Incoming {
     ///
     /// Used by `Engine::poll_app_data` to advance a scan hint without re-walking
     /// the entire queue on each poll.
+    #[allow(dead_code)]
     pub fn records_mut(&mut self) -> &mut [Record] {
         self.records.records.as_mut_slice()
     }
@@ -108,30 +109,33 @@ impl Records {
         // Find record boundaries and copy each record ONCE from the packet
         while !packet.is_empty() {
             let record_end = if Dtls13Record::is_ciphertext_header(packet[0]) {
-                // CID bit set means we can't determine record boundaries (unsupported).
-                // Discard the rest of the datagram.
-                if packet[0] & 0x10 != 0 {
-                    break;
-                }
-
                 // Unified header: variable length
                 if packet.len() < 2 {
                     return Err(InternalError::parse_incomplete());
                 }
 
                 let flags = packet[0];
+                let c_flag = flags & 0x10 != 0;
+                let cid_len = if c_flag {
+                    match decrypt.local_connection_id() {
+                        Some(cid) => cid.len(),
+                        None => break,
+                    }
+                } else {
+                    0
+                };
                 let s_flag = flags & 0b0000_1000 != 0;
                 let l_flag = flags & 0b0000_0100 != 0;
                 let seq_len = if s_flag { 2 } else { 1 };
                 let len_len = if l_flag { 2 } else { 0 };
-                let header_len = 1 + seq_len + len_len;
+                let header_len = 1 + cid_len + seq_len + len_len;
 
                 if packet.len() < header_len {
                     return Err(InternalError::parse_incomplete());
                 }
 
                 if l_flag {
-                    let len_offset = 1 + seq_len;
+                    let len_offset = 1 + cid_len + seq_len;
                     // unwrap: header_len check above ensures 2 bytes at len_offset
                     let length_bytes: [u8; 2] =
                         packet[len_offset..len_offset + 2].try_into().unwrap();
@@ -205,7 +209,14 @@ impl Record {
         let mut buffer = decrypt.pop_buffer();
         buffer.extend_from_slice(record_slice);
 
-        match Self::parse_buffer(&mut buffer, decrypt, cs) {
+        let c_flag = buffer[0] & 0x10 != 0;
+        let cid_len = if c_flag {
+            decrypt.local_connection_id().map_or(0, |c| c.len())
+        } else {
+            0
+        };
+
+        match Self::parse_buffer(&mut buffer, decrypt, cs, cid_len) {
             Ok(Some(parsed)) => Ok(Some(Record { buffer, parsed })),
             result => {
                 decrypt.push_buffer(buffer);
@@ -226,6 +237,7 @@ impl Record {
         buffer: &mut Buf,
         decrypt: &mut dyn RecordHandler,
         cs: Option<Dtls13CipherSuite>,
+        cid_len: usize,
     ) -> Result<Option<Box<ParsedRecord>>, InternalError> {
         let is_ciphertext = Dtls13Record::is_ciphertext_header(buffer[0]);
 
@@ -274,14 +286,14 @@ impl Record {
                 // Decrypt sequence bytes in place
                 decrypt.decrypt_sequence_number(
                     full_epoch,
-                    &mut buffer[1..1 + seq_len],
+                    &mut buffer[1 + cid_len..1 + cid_len + seq_len],
                     &ciphertext_sample,
                 );
             }
         }
 
         // Parse only the unified header (small on stack, no handshake list yet).
-        let header = match Dtls13Record::parse(buffer, 0) {
+        let header = match Dtls13Record::parse(buffer, 0, cid_len) {
             Ok((_, header)) => header,
             Err(e) => {
                 trace!("Discarding record: parse failed: {}", e);
@@ -296,6 +308,17 @@ impl Record {
         if !decrypt.is_peer_encryption_enabled() {
             let parsed = ParsedRecord::parse_decrypted(header, buffer, cs);
             return Ok(Some(Box::new(parsed)));
+        }
+
+        if cid_len > 0 {
+            let cid_bytes = &buffer[1..1 + cid_len];
+            match decrypt.local_connection_id() {
+                Some(expected) if expected == cid_bytes => {}
+                _ => {
+                    trace!("Discarding record: CID mismatch");
+                    return Ok(None);
+                }
+            }
         }
 
         // Resolve the full epoch from the 2-bit value in the unified header
@@ -329,7 +352,7 @@ impl Record {
             return Ok(None);
         }
 
-        let mut header_buf = [0u8; 5];
+        let mut header_buf = [0u8; 32];
         header_buf[..header_end].copy_from_slice(&buffer[..header_end]);
 
         // The encrypted part starts right after the unified header.
@@ -451,7 +474,7 @@ impl ParsedRecord {
         input: &[u8],
         cipher_suite: Option<Dtls13CipherSuite>,
     ) -> Result<ParsedRecord, InternalError> {
-        let (_, record) = Dtls13Record::parse(input, 0)?;
+        let (_, record) = Dtls13Record::parse(input, 0, 0)?;
         let handshakes = parse_handshakes_for(&record, input, cipher_suite);
         Ok(ParsedRecord {
             record,
@@ -505,6 +528,9 @@ pub trait RecordHandler {
     fn pop_buffer(&mut self) -> Buf;
     /// Recycle a buffer when parsing fails or silently discards a record.
     fn push_buffer(&mut self, buffer: Buf);
+    /// Local Connection ID (RFC 9146). `Some(_)` means we accept
+    /// ciphertext records with the C-bit set.
+    fn local_connection_id(&self) -> Option<&[u8]>;
     fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error>;
     fn is_peer_encryption_enabled(&self) -> bool;
     fn resolve_epoch(&self, epoch_bits: u8) -> u16;
@@ -649,6 +675,10 @@ mod tests {
         fn push_buffer(&mut self, buffer: Buf) {
             self.buffers_returned += 1;
             self.buffers.push(buffer);
+        }
+
+        fn local_connection_id(&self) -> Option<&[u8]> {
+            None
         }
 
         fn classify_record(&mut self, record: Record) -> Result<Option<Record>, Error> {

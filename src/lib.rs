@@ -174,8 +174,6 @@ mod dtls13;
 
 use dtls13::{Client, Server};
 
-mod time_tricks;
-
 pub(crate) mod buffer;
 mod util;
 mod window;
@@ -386,6 +384,29 @@ impl Dtls {
             Inner::Client(c) => c.close(),
             Inner::Server(s) => s.close(),
         }
+    }
+
+    /// ALPN protocol negotiated during the handshake (RFC 7301).
+    ///
+    /// Returns `None` before the handshake completes, when ALPN was not
+    /// offered, or when the server rejected all proposed protocols.
+    pub fn negotiated_alpn(&self) -> Option<&[u8]> {
+        match self.inner.as_ref()? {
+            Inner::Client(c) => c.negotiated_alpn(),
+            Inner::Server(s) => s.negotiated_alpn(),
+        }
+    }
+
+    /// SNI host name received from the peer (server role only).
+    ///
+    /// Returns `None` before a ClientHello is parsed, on the client role,
+    /// or when the peer did not send SNI.
+    pub fn peer_server_name(&self) -> Option<&str> {
+        let bytes = match self.inner.as_ref()? {
+            Inner::Server(s) => s.peer_server_name()?,
+            Inner::Client(_) => return None,
+        };
+        std::str::from_utf8(bytes).ok()
     }
 }
 

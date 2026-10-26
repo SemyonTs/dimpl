@@ -448,6 +448,8 @@ pub enum SecurityError {
     NoCommonCipherSuite,
     /// No common DTLS 1.3 key exchange group was found.
     NoCommonKeyExchangeGroup,
+    /// No ALPN protocol in common between our list and the peer's.
+    NoCommonAlpnProtocol,
     /// A HelloRetryRequest selected a disallowed cipher suite.
     HrrSelectedDisallowedCipherSuite,
     /// A HelloRetryRequest did not select DTLS 1.3.
@@ -547,6 +549,15 @@ pub enum ConfigError {
     NoDtls12KeyExchangeGroupsAfterFiltering,
     /// DTLS 1.3 suites are enabled but no key exchange group remains enabled.
     NoDtls13KeyExchangeGroupsAfterFiltering,
+    /// The configured Record Size Limit is outside RFC 8449's `[64, 16385]`.
+    InvalidRecordSizeLimit,
+    /// The configured Connection ID exceeds the maximum supported length.
+    ConnectionIdTooLong {
+        /// The actual configured CID length in bytes.
+        len: usize,
+        /// The maximum accepted CID length.
+        max: usize,
+    },
     /// Crypto provider validation failed.
     CryptoProvider(CryptoProviderValidationError),
 }
@@ -1134,6 +1145,7 @@ impl fmt::Display for SecurityError {
             }
             Self::NoCommonCipherSuite => write!(f, "no common cipher suite found"),
             Self::NoCommonKeyExchangeGroup => write!(f, "no common key exchange group"),
+            Self::NoCommonAlpnProtocol => write!(f, "no common ALPN protocol"),
             Self::HrrSelectedDisallowedCipherSuite => {
                 write!(f, "HRR selected disallowed cipher suite")
             }
@@ -1242,6 +1254,12 @@ impl fmt::Display for ConfigError {
                 f,
                 "DTLS 1.3 cipher suites are enabled but no key exchange groups remain after filtering"
             ),
+            Self::InvalidRecordSizeLimit => {
+                write!(f, "record_size_limit must be within [64, 16385]")
+            }
+            Self::ConnectionIdTooLong { len, max } => {
+                write!(f, "connection_id length {len} exceeds maximum {max}")
+            }
             Self::CryptoProvider(err) => write!(f, "crypto provider validation failed: {err}"),
         }
     }

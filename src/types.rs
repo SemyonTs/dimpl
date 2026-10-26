@@ -1,11 +1,10 @@
-//! Shared types used by both DTLS 1.2 and DTLS 1.3.
+//! Shared cryptographic and protocol types used by DTLS 1.3.
 //!
 //! These types represent cryptographic primitives and protocol elements
-//! that are common across DTLS versions.
+//! that are used across the DTLS 1.3 implementation.
 
 use std::cmp::Ordering;
 use std::fmt;
-use std::time::Instant;
 
 use arrayvec::ArrayVec;
 use nom::IResult;
@@ -14,9 +13,6 @@ use nom::number::complete::{be_u8, be_u16};
 
 use crate::SeededRng;
 use crate::buffer::Buf;
-use crate::time_tricks::InstantExt;
-
-pub type NamedGroupVec = ArrayVec<NamedGroup, { NamedGroup::supported().len() }>;
 
 // ============================================================================
 // Random
@@ -24,12 +20,9 @@ pub type NamedGroupVec = ArrayVec<NamedGroup, { NamedGroup::supported().len() }>
 
 /// ClientHello / ServerHello random value (32 bytes on the wire).
 ///
-/// Used by both DTLS 1.2 and DTLS 1.3. Construction differs:
-/// - DTLS 1.2: first 4 bytes are `gmt_unix_time` ([`Random::new_with_time`]).
-/// - DTLS 1.3: all 32 bytes are random ([`Random::new`]).
-///
-/// After construction neither version accesses sub-fields — all consumers
-/// use [`bytes`](Self::bytes) or [`serialize`](Self::serialize).
+/// In DTLS 1.3 all 32 bytes are uniformly random; there is no embedded
+/// `gmt_unix_time`. All consumers use [`bytes`](Self::bytes) or
+/// [`serialize`](Self::serialize).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Random {
     /// The 32 raw bytes of the random value.
@@ -37,26 +30,11 @@ pub struct Random {
 }
 
 impl Random {
-    /// All-random (DTLS 1.3 / hybrid style).
+    /// Create a fresh 32-byte random value.
     pub fn new(rng: &mut SeededRng) -> Self {
         Self {
             bytes: rng.random(),
         }
-    }
-
-    /// Timestamp in first 4 bytes (DTLS 1.2 style).
-    pub fn new_with_time(now: Instant, rng: &mut SeededRng) -> Self {
-        let gmt_duration = now.to_unix_duration();
-        // This is valid until year 2106, at which point I will be beyond caring.
-        let gmt_unix_time = gmt_duration.as_secs() as u32;
-
-        let random_bytes: [u8; 28] = rng.random();
-
-        let mut bytes = [0u8; 32];
-        bytes[..4].copy_from_slice(&gmt_unix_time.to_be_bytes());
-        bytes[4..].copy_from_slice(&random_bytes);
-
-        Self { bytes }
     }
 
     /// Parse a 32-byte `Random` from wire format.
@@ -80,7 +58,6 @@ impl Random {
 /// Elliptic curves and key exchange groups (RFC 8422, RFC 8446).
 ///
 /// Used for Elliptic Curve Diffie-Hellman Ephemeral (ECDHE) key exchange.
-/// The same named groups are used in both DTLS 1.2 and DTLS 1.3.
 #[repr(transparent)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct NamedGroup(u16);
@@ -282,6 +259,10 @@ impl HashAlgorithm {
     /// SHA-512 hash.
     pub const SHA512: Self = Self(6);
 
+    /// Sentinel for "unknown" when a caller must return *some*
+    /// `HashAlgorithm` for a scheme/suite that has no known hash.
+    ///
+    /// `output_len` returns 0 and `is_unknown` returns true for this value.
     pub(crate) const UNKNOWN_DERIVED: Self = Self(u8::MAX);
 
     /// Convert a wire format u8 value to a `HashAlgorithm`.
@@ -342,7 +323,7 @@ impl fmt::Debug for HashAlgorithm {
 /// Signature algorithms used in DTLS handshakes.
 ///
 /// Represents the underlying signature primitive (RSA, ECDSA, etc.).
-/// Used internally for signing operations across both DTLS versions.
+/// Used internally for signing operations.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SignatureAlgorithm(u8);
@@ -363,8 +344,6 @@ impl SignatureAlgorithm {
     pub const DSA: Self = Self(2);
     /// ECDSA signatures.
     pub const ECDSA: Self = Self(3);
-
-    pub(crate) const UNKNOWN_DERIVED: Self = Self(u8::MAX);
 
     /// Convert an 8-bit value into a `SignatureAlgorithm`.
     pub const fn from_u8(value: u8) -> Self {
@@ -406,15 +385,17 @@ impl fmt::Debug for SignatureAlgorithm {
 
 /// DTLS record content types.
 ///
-/// Identifies the type of data in a DTLS record. These values are the same
-/// for both DTLS 1.2 and DTLS 1.3.
+/// Identifies the type of data in a DTLS record.
 #[repr(transparent)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct ContentType(u8);
 
 #[allow(non_upper_case_globals)]
 impl ContentType {
-    /// Change Cipher Spec (used in DTLS 1.2, compatibility-only in 1.3).
+    /// Change Cipher Spec.
+    ///
+    /// Legacy content type: rejected by the DTLS 1.3 plaintext parser, but
+    /// recognised here so callers can classify and discard such records.
     pub const ChangeCipherSpec: Self = Self(20);
     /// Alert message.
     pub const Alert: Self = Self(21);
@@ -466,8 +447,7 @@ impl fmt::Debug for ContentType {
 
 /// DTLS record sequence number (epoch + sequence).
 ///
-/// Both DTLS 1.2 and DTLS 1.3 use an epoch and sequence number for
-/// replay protection and AEAD nonce construction.
+/// Used for replay protection and AEAD nonce construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Sequence {
     /// The epoch (incremented on key change).
@@ -521,8 +501,7 @@ impl PartialOrd for Sequence {
 /// Signature schemes used in TLS 1.3/DTLS 1.3 (RFC 8446).
 ///
 /// In TLS 1.3, signature schemes combine the signature algorithm with the
-/// hash algorithm into a single identifier, unlike TLS 1.2 where they were
-/// separate.
+/// hash algorithm into a single identifier.
 #[repr(transparent)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct SignatureScheme(u16);
@@ -681,8 +660,8 @@ impl fmt::Debug for SignatureScheme {
 
 /// Cipher suites for DTLS 1.3 (RFC 9147).
 ///
-/// Unlike DTLS 1.2, TLS 1.3 cipher suites only specify the AEAD algorithm
-/// and hash function. Key exchange is negotiated separately via key_share.
+/// TLS 1.3 cipher suites only specify the AEAD algorithm and hash function.
+/// Key exchange is negotiated separately via key_share.
 #[repr(transparent)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Dtls13CipherSuite(u16);
@@ -782,7 +761,7 @@ impl fmt::Debug for Dtls13CipherSuite {
 
 /// DTLS protocol version identifiers.
 ///
-/// Used in record headers and handshake messages for both DTLS 1.2 and 1.3.
+/// Used in record headers and handshake messages.
 #[repr(transparent)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct ProtocolVersion(u16);
@@ -839,8 +818,8 @@ impl fmt::Debug for ProtocolVersion {
 
 /// TLS compression methods.
 ///
-/// Used in ClientHello/ServerHello for both DTLS 1.2 and 1.3.
-/// TLS 1.3 only uses Null compression but includes it for compatibility.
+/// Used in ClientHello/ServerHello. TLS 1.3 only uses Null compression
+/// but includes it for compatibility.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CompressionMethod(u8);
@@ -989,6 +968,12 @@ mod tests {
         assert_eq!(format!("{:?}", HashAlgorithm::None), "None");
         assert_eq!(format!("{:?}", HashAlgorithm::SHA256), "SHA256");
         assert_eq!(format!("{:?}", HashAlgorithm::from_u8(7)), "Unknown(7)");
+    }
+
+    #[test]
+    fn hash_algorithm_unknown_derived_sentinel() {
+        assert!(HashAlgorithm::UNKNOWN_DERIVED.is_unknown());
+        assert_eq!(HashAlgorithm::UNKNOWN_DERIVED.output_len(), 0);
     }
 
     #[test]
@@ -1261,9 +1246,9 @@ mod tests {
     #[test]
     fn random_parse_roundtrip() {
         let data = [
-            0x5F, 0x37, 0xA9, 0x4B, // could be gmt_unix_time in 1.2
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
-            0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
+            0x5F, 0x37, 0xA9, 0x4B, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
+            0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+            0x19, 0x1A, 0x1B, 0x1C,
         ];
 
         let (_, parsed) = Random::parse(&data).unwrap();

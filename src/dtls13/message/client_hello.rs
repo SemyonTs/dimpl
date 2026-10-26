@@ -1,8 +1,9 @@
 use super::parse_cookie_extension;
-use super::{CompressionMethod, Dtls13CipherSuite, ProtocolVersion};
+use super::{CompressionMethod, ConnectionId, Dtls13CipherSuite, ProtocolVersion};
 use super::{Cookie, Extension, Random, SessionId};
 use super::{ExtensionType, KeyShareClientHello, SignatureAlgorithmsExtension};
 use super::{NamedGroup, SrtpProfileId};
+use super::{ProtocolNameList, RecordSizeLimit, ServerNameList};
 use super::{SupportedGroupsExtension, SupportedVersionsClientHello, UseSrtpExtension};
 use arrayvec::ArrayVec;
 use nom::bytes::complete::take;
@@ -13,6 +14,11 @@ use nom::{Err, IResult};
 use crate::buffer::Buf;
 use crate::util::{many0, many1};
 
+/// Maximum number of extensions a ClientHello can carry.
+///
+/// Budget: 10 supported + padding + cookie + spare.
+const MAX_CH_EXTENSIONS: usize = 12;
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct ClientHello {
     pub legacy_version: ProtocolVersion,
@@ -21,7 +27,7 @@ pub struct ClientHello {
     pub legacy_cookie: Cookie,
     pub cipher_suites: ArrayVec<Dtls13CipherSuite, 3>,
     pub legacy_compression_methods: ArrayVec<CompressionMethod, 1>,
-    pub extensions: ArrayVec<Extension, 8>,
+    pub extensions: ArrayVec<Extension, MAX_CH_EXTENSIONS>,
     // Receive-side values; outbound serialization uses the raw extensions above.
     parsed_extensions: ParsedExtensions,
 }
@@ -32,6 +38,10 @@ struct ParsedExtensions {
     key_share: Option<KeyShareClientHello>,
     supported_groups: Option<ArrayVec<NamedGroup, 4>>,
     srtp_profiles: Option<ArrayVec<SrtpProfileId, 3>>,
+    server_name: Option<ServerNameList>,
+    alpn: Option<ProtocolNameList>,
+    record_size_limit: Option<RecordSizeLimit>,
+    connection_id: Option<ConnectionId>,
 }
 
 impl ClientHello {
@@ -123,7 +133,7 @@ impl ClientHello {
         input: &'a [u8],
         base_offset: usize,
         parsed: &mut ParsedExtensions,
-    ) -> IResult<&'a [u8], ArrayVec<Extension, 8>> {
+    ) -> IResult<&'a [u8], ArrayVec<Extension, MAX_CH_EXTENSIONS>> {
         let mut extensions = ArrayVec::new();
 
         if input.is_empty() {
@@ -187,6 +197,24 @@ impl ClientHello {
                     ExtensionType::Cookie => {
                         parse_cookie_extension(data)?;
                     }
+                    ExtensionType::ServerName => {
+                        parsed.server_name = Some(
+                            ServerNameList::parse(data, extension.extension_data_range.start)?.1,
+                        );
+                    }
+                    ExtensionType::ApplicationLayerProtocolNegotiation => {
+                        parsed.alpn = Some(
+                            ProtocolNameList::parse(data, extension.extension_data_range.start)?.1,
+                        );
+                    }
+                    ExtensionType::RecordSizeLimit => {
+                        parsed.record_size_limit = Some(RecordSizeLimit::parse(data)?.1);
+                    }
+                    ExtensionType::ConnectionId => {
+                        parsed.connection_id = Some(
+                            ConnectionId::parse(data, extension.extension_data_range.start)?.1,
+                        );
+                    }
                     _ => {}
                 }
                 extensions.try_push(extension).map_err(|_| {
@@ -213,6 +241,22 @@ impl ClientHello {
 
     pub fn srtp_profiles(&self) -> Option<&ArrayVec<SrtpProfileId, 3>> {
         self.parsed_extensions.srtp_profiles.as_ref()
+    }
+
+    pub fn server_name(&self) -> Option<&ServerNameList> {
+        self.parsed_extensions.server_name.as_ref()
+    }
+
+    pub fn alpn(&self) -> Option<&ProtocolNameList> {
+        self.parsed_extensions.alpn.as_ref()
+    }
+
+    pub fn record_size_limit(&self) -> Option<RecordSizeLimit> {
+        self.parsed_extensions.record_size_limit
+    }
+
+    pub fn connection_id(&self) -> Option<&ConnectionId> {
+        self.parsed_extensions.connection_id.as_ref()
     }
 
     pub fn serialize(&self, source_buf: &[u8], output: &mut Buf) {
@@ -303,8 +347,6 @@ mod tests {
     #[test]
     fn dtls12_only_cipher_suites_parse_for_auto_detection() {
         let mut message = MESSAGE.to_vec();
-        // DTLS 1.2 ECDHE_ECDSA AES-GCM suites are intentionally unknown to
-        // the DTLS 1.3 suite filter, but the ClientHello is structurally valid.
         message[40..44].copy_from_slice(&[0xC0, 0x2B, 0xC0, 0x2C]);
 
         let (rest, parsed) = ClientHello::parse_allow_unknown_suites(&message, 0).unwrap();
@@ -448,5 +490,58 @@ mod tests {
             ClientHello::parse(&message, 0).is_err(),
             "declared extension vector length must consume the remaining ClientHello body"
         );
+    }
+
+    #[test]
+    fn new_extensions_parse_and_expose_getters() {
+        let mut message = MESSAGE.to_vec();
+        let mut extensions = Vec::new();
+
+        // ServerName
+        let sn: &[u8] = &[
+            0x00, 0x0C, // list length
+            0x00, 0x00, 0x09, b'l', b'o', b'c', b'a', b'l', b'.', b'c', b'o', b'm',
+        ];
+        extensions.extend_from_slice(&ExtensionType::ServerName.as_u16().to_be_bytes());
+        extensions.extend_from_slice(&(sn.len() as u16).to_be_bytes());
+        extensions.extend_from_slice(sn);
+
+        // ALPN
+        let alpn: &[u8] = &[0x00, 0x06, 0x02, b'h', b'2', 0x02, b'c', b'o'];
+        extensions.extend_from_slice(
+            &ExtensionType::ApplicationLayerProtocolNegotiation
+                .as_u16()
+                .to_be_bytes(),
+        );
+        extensions.extend_from_slice(&(alpn.len() as u16).to_be_bytes());
+        extensions.extend_from_slice(alpn);
+
+        // RecordSizeLimit
+        let rsl: &[u8] = &[0x04, 0x00];
+        extensions.extend_from_slice(&ExtensionType::RecordSizeLimit.as_u16().to_be_bytes());
+        extensions.extend_from_slice(&(rsl.len() as u16).to_be_bytes());
+        extensions.extend_from_slice(rsl);
+
+        // ConnectionId
+        let cid: &[u8] = &[0x02, 0xAB, 0xCD];
+        extensions.extend_from_slice(&ExtensionType::ConnectionId.as_u16().to_be_bytes());
+        extensions.extend_from_slice(&(cid.len() as u16).to_be_bytes());
+        extensions.extend_from_slice(cid);
+
+        message.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
+        message.extend_from_slice(&extensions);
+
+        let (rest, parsed) = ClientHello::parse(&message, 0).unwrap();
+        assert!(rest.is_empty());
+
+        assert_eq!(
+            parsed.server_name().unwrap().host_name(&message),
+            Some(&b"local.com"[..])
+        );
+        let alpn = parsed.alpn().unwrap();
+        assert_eq!(alpn.get(0, &message), Some(&b"h2"[..]));
+        assert_eq!(alpn.get(1, &message), Some(&b"co"[..]));
+        assert_eq!(parsed.record_size_limit().unwrap().limit, 1024);
+        assert_eq!(parsed.connection_id().unwrap().cid(&message), &[0xAB, 0xCD]);
     }
 }
