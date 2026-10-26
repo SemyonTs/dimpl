@@ -3,7 +3,7 @@
 [![Downloads](https://img.shields.io/crates/d/dimpl13?label=downloads)](https://crates.io/crates/dimpl13)
 [![License](https://img.shields.io/crates/l/dimpl13?label=license)](https://crates.io/crates/dimpl13)
 [![docs.rs](https://img.shields.io/docsrs/dimpl13?label=docs.rs)](https://docs.rs/dimpl13)
-[![MSRV](https://img.shields.io/badge/MSRV-1.85.0-blue)](https://blog.rust-lang.org/)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88.0-blue)](https://blog.rust-lang.org/)
 
 **dimpl13** is a separate fork of [dimpl](https://github.com/algesten/dimpl) aimed at
 building a sufficiently performant and convenient middleware for **DTLS 1.3**
@@ -208,7 +208,7 @@ and that much is actually used only when the queues are fully loaded.
   [dimpl][upstream].
 
 #### MSRV
-Rust 1.85.0
+Rust 1.88.0
 
 #### Status
 - Session resumption is not implemented (WebRTC performs a full handshake on ICE restart).

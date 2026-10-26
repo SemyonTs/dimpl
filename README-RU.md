@@ -3,7 +3,7 @@
 [![Downloads](https://img.shields.io/crates/d/dimpl13?label=downloads)](https://crates.io/crates/dimpl13)
 [![License](https://img.shields.io/crates/l/dimpl13?label=license)](https://crates.io/crates/dimpl13)
 [![docs.rs](https://img.shields.io/docsrs/dimpl13?label=docs.rs)](https://docs.rs/dimpl13)
-[![MSRV](https://img.shields.io/badge/MSRV-1.85.0-blue)](https://blog.rust-lang.org/)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88.0-blue)](https://blog.rust-lang.org/)
 
 **dimpl13** — это отдельное ответвление [dimpl](https://github.com/algesten/dimpl), нацеленное на
 создание достаточно производительного и удобного middleware для **DTLS 1.3**
@@ -209,7 +209,7 @@ let config = Arc::new(
   [dimpl][upstream].
 
 #### MSRV
-Rust 1.85.0
+Rust 1.88.0
 
 #### Status
 - Session resumption не реализован (WebRTC делает full handshake на ICE restart).
