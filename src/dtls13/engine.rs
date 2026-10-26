@@ -64,6 +64,11 @@ pub struct Engine {
     /// The cipher suite in use. Set by ServerHello.
     cipher_suite: Option<Dtls13CipherSuite>,
 
+    /// Cached provider for `cipher_suite`. Populated by `set_cipher_suite` so
+    /// per-record hot paths (`create_ciphertext_record`, `decrypt_sequence_number`,
+    /// `min_protected_fragment_len`, `create_handshake`) skip the linear search.
+    cipher_suite_provider: Option<&'static dyn SupportedDtls13CipherSuite>,
+
     /// Handshake send keys (epoch 2)
     hs_send_keys: Option<EpochKeys>,
 
@@ -224,6 +229,7 @@ impl Engine {
             queue_rx: QueueRx::new(),
             queue_tx: QueueTx::new(),
             cipher_suite: None,
+            cipher_suite_provider: None,
             hs_send_keys: None,
             hs_recv_keys: None,
             hs_expected_recv_seq: 0,
@@ -319,6 +325,15 @@ impl Engine {
 
     pub fn set_cipher_suite(&mut self, cipher_suite: Dtls13CipherSuite) {
         self.cipher_suite = Some(cipher_suite);
+        // Cache the provider alongside the suite so the per-record hot path
+        // never repeats the linear search in `suite_provider()`.
+        self.cipher_suite_provider = self
+            .config
+            .crypto_provider()
+            .dtls13_cipher_suites
+            .iter()
+            .find(|cs| cs.suite() == cipher_suite)
+            .copied();
     }
 
     pub fn app_send_epoch(&self) -> u16 {
@@ -621,14 +636,13 @@ impl Engine {
             return PollOutput::None(buf);
         }
 
-        let mut unhandled = self
+        let next = self
             .queue_rx
             .iter()
             .flat_map(|i| i.records().iter())
-            .filter(|r| r.record().content_type == ContentType::ApplicationData)
-            .skip_while(|r| r.is_handled());
+            .find(|r| r.record().content_type == ContentType::ApplicationData && !r.is_handled());
 
-        let Some(next) = unhandled.next() else {
+        let Some(next) = next else {
             return PollOutput::None(buf);
         };
 
@@ -676,6 +690,9 @@ impl Engine {
             .expect("queue front checked above");
         let len = p.len();
         buf[..len].copy_from_slice(&p);
+        // Return the pooled allocation so the next record reuses it instead of
+        // hitting the global allocator on both drop and next `pop_buffer`.
+        self.buffers_free.push(p);
 
         PollOutput::Data(&buf[..len])
     }
@@ -1690,13 +1707,7 @@ impl Engine {
     }
 
     fn suite_provider(&self) -> &'static dyn SupportedDtls13CipherSuite {
-        let suite = self.cipher_suite.unwrap();
-        *self
-            .config
-            .crypto_provider()
-            .dtls13_cipher_suites
-            .iter()
-            .find(|cs| cs.suite() == suite)
+        self.cipher_suite_provider
             .expect("cipher suite not found in provider")
     }
 
