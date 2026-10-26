@@ -43,7 +43,7 @@ log = "0.4.29"
 nom = { version = "8", default-features = false, features = ["std"] }
 once_cell = "1.21.3"
 rand = "0.9"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3.47", features = ["formatting"] }
 arrayvec = "0.7.6"
 subtle = "2.6"
 
@@ -59,12 +59,12 @@ aws-lc-rs = { version = "^1.16", default-features = false, features = ["aws-lc-s
 
 # RustCrypto backend
 aes-gcm = { version = "0.10", optional = true }
-p256 = { version = "0.13", optional = true, features = ["ecdh"] }
-p384 = { version = "0.13", optional = true, features = ["ecdh"] }
+p256 = { version = "0.14", optional = true, features = ["ecdh"] }
+p384 = { version = "0.14", optional = true, features = ["ecdh"] }
 sha2 = { version = "0.10", optional = true }
 hmac = { version = "0.12", optional = true }
 hkdf = { version = "0.12", optional = true }
-ecdsa = { version = "0.16", optional = true, features = ["signing", "verifying"] }
+ecdsa = { version = "0.17", optional = true, features = ["algorithm"] }
 generic-array = { version = "0.14", optional = true }
 rand_core = { version = "0.6", optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
