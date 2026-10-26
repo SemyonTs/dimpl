@@ -96,8 +96,13 @@ impl Handshake {
         let original_input = input;
         let (input, header) = Self::parse_header(input)?;
 
-        let fragment_end = header.fragment_offset + header.fragment_length;
-        let fragment_out_of_bounds = fragment_end > header.length;
+        // Use checked_add: `fragment_offset + fragment_length` can overflow u32
+        // when both are near u32::MAX (an adversarial input would otherwise
+        // make the bounds check below pass by wrapping).
+        let fragment_out_of_bounds = header
+            .fragment_offset
+            .checked_add(header.fragment_length)
+            .map_or(true, |end| end > header.length);
         let empty_client_hello_fragment =
             header.msg_type == MessageType::ClientHello && header.fragment_length == 0;
 
@@ -187,8 +192,14 @@ impl Handshake {
             .map_err(|_| crate::InternalError::too_many_records())?;
         buffer.extend_from_slice(&first_buffer[range.clone()]);
 
-        let mut assembled_end =
-            first_handshake.header.fragment_offset + first_handshake.header.fragment_length;
+        // Defensive: `Handshake::parse` rejects overflow via `checked_add`, so
+        // the offset+length sum here cannot overflow. The check is kept as
+        // belt-and-braces for callers that bypass `parse` (e.g. tests).
+        let mut assembled_end = first_handshake
+            .header
+            .fragment_offset
+            .checked_add(first_handshake.header.fragment_length)
+            .ok_or_else(crate::InternalError::parse_incomplete)?;
 
         for (handshake, source_buf) in iter {
             if handshake.header.msg_type != first_handshake.header.msg_type
@@ -212,7 +223,11 @@ impl Handshake {
             if skip < frag_len {
                 buffer.extend_from_slice(&source_buf[range.start + skip..range.end]);
             }
-            let end = handshake.header.fragment_offset + handshake.header.fragment_length;
+            let end = handshake
+                .header
+                .fragment_offset
+                .checked_add(handshake.header.fragment_length)
+                .ok_or_else(crate::InternalError::parse_incomplete)?;
             if end > assembled_end {
                 assembled_end = end;
             }
@@ -238,7 +253,7 @@ impl Handshake {
             ) {
                 Ok(parsed) => parsed,
                 Err(err) => {
-                    mark_handled(handled);
+                    mark_handled(&handled);
                     return Err(err.into());
                 }
             }
@@ -246,7 +261,7 @@ impl Handshake {
             match Body::parse(buffer, 0, first_handshake.header.msg_type, cipher_suite) {
                 Ok(parsed) => parsed,
                 Err(err) => {
-                    mark_handled(handled);
+                    mark_handled(&handled);
                     return Err(err.into());
                 }
             }
@@ -259,7 +274,7 @@ impl Handshake {
                 .rejects_trailing_body_bytes()
         {
             debug!("Defragmentation failed. Body::parse() did not consume the entire buffer");
-            mark_handled(handled);
+            mark_handled(&handled);
             return Err(crate::InternalError::parse_incomplete());
         }
 
@@ -269,7 +284,7 @@ impl Handshake {
         // deferring parsing-level checks to state handlers would commit malformed
         // input and poison the transcript for a corrected retransmission.
         // Negotiation and cryptographic verification belong in the state handlers.
-        mark_handled(handled);
+        mark_handled(&handled);
 
         // If transcript is provided, write the TLS 1.3-style header + body after parsing succeeds.
         // Per RFC 9147 Section 5.2, the transcript uses msg_type(1) + length(3)
@@ -323,7 +338,7 @@ impl Handshake {
     }
 }
 
-fn mark_handled(handled: ArrayVec<&Handshake, MAX_DEFRAGMENT_HANDSHAKES>) {
+fn mark_handled(handled: &ArrayVec<&Handshake, MAX_DEFRAGMENT_HANDSHAKES>) {
     for handshake in handled {
         handshake.set_handled();
     }

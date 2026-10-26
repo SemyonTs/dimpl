@@ -20,6 +20,14 @@ impl Incoming {
         &self.records
     }
 
+    /// Mutable access to the record slice.
+    ///
+    /// Used by `Engine::poll_app_data` to advance a scan hint without re-walking
+    /// the entire queue on each poll.
+    pub fn records_mut(&mut self) -> &mut [Record] {
+        self.records.records.as_mut_slice()
+    }
+
     pub fn first(&self) -> &Record {
         // Invariant: Every Incoming must have at least one Record
         // or the parser of Incoming returns None.
@@ -558,18 +566,14 @@ fn parse_handshakes(
 /// The format is: `content || ContentType || zeros*`
 /// Scan backward past zero padding to find the content type byte.
 fn recover_inner_content_type(decrypted: &[u8]) -> Result<(ContentType, usize), InternalError> {
-    let mut i = decrypted.len();
-    // Skip zero padding
-    while i > 0 && decrypted[i - 1] == 0 {
-        i -= 1;
-    }
-    if i == 0 {
-        return Err(InternalError::parse(nom::error::ErrorKind::Fail));
-    }
-    // The byte before padding is the content type
-    i -= 1;
+    // `rposition` finds the index of the last non-zero byte: that's the
+    // content type. Everything before it is content (with content_len == i);
+    // everything after is zero padding.
+    let i = decrypted
+        .iter()
+        .rposition(|&b| b != 0)
+        .ok_or_else(|| InternalError::parse(nom::error::ErrorKind::Fail))?;
     let content_type = ContentType::from_u8(decrypted[i]);
-    // Content length is everything before the content type byte
     Ok((content_type, i))
 }
 
@@ -748,6 +752,28 @@ mod tests {
             incoming.first().parsed.handshakes.is_none(),
             "application-data record must not carry an inline handshake array"
         );
+    }
+
+    #[test]
+    fn records_mut_allows_setting_handled_in_place() {
+        let mut packet = Vec::new();
+        packet.extend_from_slice(&build_ciphertext_record(2, 1, &[0x11; 32]));
+        packet.extend_from_slice(&build_ciphertext_record(2, 2, &[0x22; 32]));
+
+        let mut handler = TestHandler::default();
+        let mut incoming = Incoming::parse_packet(&packet, &mut handler, None)
+            .unwrap()
+            .expect("packet contains two records");
+        assert_eq!(incoming.records().len(), 2);
+        assert!(!incoming.records()[0].is_handled());
+        assert!(!incoming.records()[1].is_handled());
+
+        // Mutate via the new accessor: mark both records handled.
+        for rec in incoming.records_mut() {
+            rec.set_handled();
+        }
+        assert!(incoming.records()[0].is_handled());
+        assert!(incoming.records()[1].is_handled());
     }
 
     #[test]

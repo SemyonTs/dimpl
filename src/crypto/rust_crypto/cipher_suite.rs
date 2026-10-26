@@ -5,6 +5,7 @@ use aes_gcm::aes::{Aes128, Aes256};
 use aes_gcm::{Aes128Gcm, Aes256Gcm, Key};
 use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use chacha20poly1305::ChaCha20Poly1305 as ChaCha20Poly1305Aead;
+use generic_array::{GenericArray, typenum::U12};
 
 use super::super::{Cipher, SupportedDtls12CipherSuite, SupportedDtls13CipherSuite};
 use crate::buffer::{Buf, TmpBuf};
@@ -49,31 +50,17 @@ impl AesGcm {
 
 impl Cipher for AesGcm {
     fn encrypt(&mut self, data: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), CryptoError> {
-        // Create nonce from the provided nonce bytes
-        let nonce_array: [u8; 12] = nonce[..12]
-            .try_into()
-            .map_err(|_| CryptoError::InvalidNonce)?;
+        // `Nonce` is `[u8; 12]`; from_slice is zero-copy and cannot fail.
+        let aes_nonce: &GenericArray<u8, U12> = GenericArray::from_slice(&nonce.0);
 
         match self {
-            AesGcm::Aes128(cipher) => {
-                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{GenericArray, typenum::U12};
-                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
-                cipher
-                    .encrypt_in_place(&aes_nonce, &aad, data)
-                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt))?;
-            }
-            AesGcm::Aes256(cipher) => {
-                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{GenericArray, typenum::U12};
-                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
-                cipher
-                    .encrypt_in_place(&aes_nonce, &aad, data)
-                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt))?;
-            }
+            AesGcm::Aes128(cipher) => cipher
+                .encrypt_in_place(aes_nonce, &aad, data)
+                .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt)),
+            AesGcm::Aes256(cipher) => cipher
+                .encrypt_in_place(aes_nonce, &aad, data)
+                .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt)),
         }
-
-        Ok(())
     }
 
     fn decrypt(
@@ -89,34 +76,17 @@ impl Cipher for AesGcm {
             });
         }
 
-        // Create nonce from the provided nonce bytes
-        let nonce_array: [u8; 12] = nonce[..12]
-            .try_into()
-            .map_err(|_| CryptoError::InvalidNonce)?;
+        let aes_nonce: &GenericArray<u8, U12> = GenericArray::from_slice(&nonce.0);
 
         match self {
-            AesGcm::Aes128(cipher) => {
-                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{GenericArray, typenum::U12};
-                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
-                cipher
-                    .decrypt_in_place(&aes_nonce, &aad, ciphertext)
-                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt))?;
-            }
-            AesGcm::Aes256(cipher) => {
-                // Create nonce from fixed-size array - AesNonce is GenericArray<u8, U12>
-                use generic_array::{GenericArray, typenum::U12};
-                let aes_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
-                cipher
-                    .decrypt_in_place(&aes_nonce, &aad, ciphertext)
-                    .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt))?;
-            }
+            AesGcm::Aes128(cipher) => cipher
+                .decrypt_in_place(aes_nonce, &aad, ciphertext)
+                .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt)),
+            AesGcm::Aes256(cipher) => cipher
+                .decrypt_in_place(aes_nonce, &aad, ciphertext)
+                .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt)),
         }
-
-        // decrypt_in_place already removes the tag and shortens the buffer
-        // No need to truncate further
-
-        Ok(())
+        // decrypt_in_place removes the tag and shortens the buffer itself.
     }
 }
 
@@ -149,17 +119,10 @@ impl ChaCha20Poly1305Cipher {
 
 impl Cipher for ChaCha20Poly1305Cipher {
     fn encrypt(&mut self, data: &mut Buf, aad: Aad, nonce: Nonce) -> Result<(), CryptoError> {
-        let nonce_array: [u8; 12] = nonce[..12]
-            .try_into()
-            .map_err(|_| CryptoError::InvalidNonce)?;
-
-        use generic_array::{GenericArray, typenum::U12};
-        let chacha_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
+        let chacha_nonce: &GenericArray<u8, U12> = GenericArray::from_slice(&nonce.0);
         self.cipher
-            .encrypt_in_place(&chacha_nonce, &aad, data)
-            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt))?;
-
-        Ok(())
+            .encrypt_in_place(chacha_nonce, &aad, data)
+            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Encrypt))
     }
 
     fn decrypt(
@@ -175,17 +138,10 @@ impl Cipher for ChaCha20Poly1305Cipher {
             });
         }
 
-        let nonce_array: [u8; 12] = nonce[..12]
-            .try_into()
-            .map_err(|_| CryptoError::InvalidNonce)?;
-
-        use generic_array::{GenericArray, typenum::U12};
-        let chacha_nonce = GenericArray::<u8, U12>::clone_from_slice(&nonce_array);
+        let chacha_nonce: &GenericArray<u8, U12> = GenericArray::from_slice(&nonce.0);
         self.cipher
-            .decrypt_in_place(&chacha_nonce, &aad, ciphertext)
-            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt))?;
-
-        Ok(())
+            .decrypt_in_place(chacha_nonce, &aad, ciphertext)
+            .map_err(|_| CryptoError::OperationFailed(CryptoOperation::Decrypt))
     }
 }
 
@@ -448,8 +404,10 @@ impl SupportedDtls13CipherSuite for Tls13ChaCha20Poly1305Sha256 {
         // Seek to the correct block counter position (each block = 64 bytes)
         cipher.seek(counter as u64 * 64);
 
+        // Only 5 bytes are used for header protection; leave the rest zero
+        // to match aws-lc-rs behaviour and the DTLS 1.3 spec.
         let mut out = [0u8; 16];
-        cipher.apply_keystream(&mut out);
+        cipher.apply_keystream(&mut out[..5]);
         out
     }
 }

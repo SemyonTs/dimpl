@@ -17,17 +17,44 @@ use crate::buffer::Buf;
 use crate::types::{HashAlgorithm, NamedGroup, SignatureAlgorithm};
 use crate::{CryptoError, CryptoOperation};
 
+/// OID for the `id-ecPublicKey` algorithm (1.2.840.10045.2.1).
+const OID_EC_PUBLIC_KEY: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
+
 /// ECDSA signing key implementation.
+///
+/// The `hash` field is fixed at key-load time (matching how aws-lc-rs binds
+/// the hash to the signing algorithm), so `sign()` and `hash_algorithm()`
+/// avoid re-comparing `signing_algorithm` against the two known statics.
 struct EcdsaSigningKey {
     key_pair: EcdsaKeyPair,
     signing_algorithm: &'static EcdsaSigningAlgorithm,
+    hash: HashAlgorithm,
 }
 
 impl std::fmt::Debug for EcdsaSigningKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EcdsaSigningKey")
             .field("signing_algorithm", &self.signing_algorithm)
+            .field("hash", &self.hash)
             .finish()
+    }
+}
+
+impl EcdsaSigningKey {
+    fn new_p256(key_pair: EcdsaKeyPair) -> Self {
+        Self {
+            key_pair,
+            signing_algorithm: &ECDSA_P256_SHA256_ASN1_SIGNING,
+            hash: HashAlgorithm::SHA256,
+        }
+    }
+
+    fn new_p384(key_pair: EcdsaKeyPair) -> Self {
+        Self {
+            key_pair,
+            signing_algorithm: &ECDSA_P384_SHA384_ASN1_SIGNING,
+            hash: HashAlgorithm::SHA384,
+        }
     }
 }
 
@@ -38,13 +65,13 @@ impl SigningKey for EcdsaSigningKey {
         hash_alg: HashAlgorithm,
         buf: &mut Buf,
     ) -> Result<(), CryptoError> {
-        let key_hash = self.hash_algorithm();
-        if hash_alg != key_hash {
+        if hash_alg != self.hash {
             return Err(CryptoError::SigningKeyHashMismatch {
-                key_hash,
+                key_hash: self.hash,
                 requested: hash_alg,
             });
         }
+        // SystemRandom is a zero-sized handle; construction is free.
         let rng = aws_lc_rs::rand::SystemRandom::new();
         let signature = self
             .key_pair
@@ -60,24 +87,12 @@ impl SigningKey for EcdsaSigningKey {
     }
 
     fn hash_algorithm(&self) -> HashAlgorithm {
-        if self.signing_algorithm == &ECDSA_P256_SHA256_ASN1_SIGNING {
-            HashAlgorithm::SHA256
-        } else if self.signing_algorithm == &ECDSA_P384_SHA384_ASN1_SIGNING {
-            HashAlgorithm::SHA384
-        } else {
-            panic!("Unsupported signing algorithm")
-        }
+        self.hash
     }
 
     fn supported_hash_algorithms(&self) -> &[HashAlgorithm] {
         // aws-lc-rs locks the hash at key-load time; only one is supported.
-        if self.signing_algorithm == &ECDSA_P256_SHA256_ASN1_SIGNING {
-            &[HashAlgorithm::SHA256]
-        } else if self.signing_algorithm == &ECDSA_P384_SHA384_ASN1_SIGNING {
-            &[HashAlgorithm::SHA384]
-        } else {
-            panic!("Unsupported signing algorithm")
-        }
+        std::slice::from_ref(&self.hash)
     }
 }
 
@@ -87,38 +102,43 @@ pub(super) struct AwsLcKeyProvider;
 
 impl KeyProvider for AwsLcKeyProvider {
     fn load_private_key(&self, key_der: &[u8]) -> Result<Box<dyn SigningKey>, CryptoError> {
-        // Try PKCS#8 DER format first (most common)
+        // Try PKCS#8 DER format first (most common).
         if let Ok(key_pair) = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, key_der) {
-            return Ok(Box::new(EcdsaSigningKey {
-                key_pair,
-                signing_algorithm: &ECDSA_P256_SHA256_ASN1_SIGNING,
-            }));
+            return Ok(Box::new(EcdsaSigningKey::new_p256(key_pair)));
         }
         if let Ok(key_pair) = EcdsaKeyPair::from_pkcs8(&ECDSA_P384_SHA384_ASN1_SIGNING, key_der) {
-            return Ok(Box::new(EcdsaSigningKey {
-                key_pair,
-                signing_algorithm: &ECDSA_P384_SHA384_ASN1_SIGNING,
-            }));
+            return Ok(Box::new(EcdsaSigningKey::new_p384(key_pair)));
         }
 
-        // Try parsing as SEC1 DER format (OpenSSL EC private key format)
+        // Try parsing as SEC1 DER format (OpenSSL EC private key format).
         if let Ok(ec_key) = sec1::EcPrivateKey::try_from(key_der) {
-            let private_key_len = ec_key.private_key.len();
-
+            // Determine the curve: prefer the explicit parameters, fall back
+            // to inferring it from the private key length.
             let curve_oid = if let Some(params) = &ec_key.parameters {
                 match params {
                     sec1::EcParameters::NamedCurve(oid) => Some(*oid),
                 }
-            } else if private_key_len == 32 {
-                Some(ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7")) // P-256
-            } else if private_key_len == 48 {
-                Some(ObjectIdentifier::new_unwrap("1.3.132.0.34")) // P-384
             } else {
-                None
+                match ec_key.private_key.len() {
+                    32 => Some(OID_P256),
+                    48 => Some(OID_P384),
+                    _ => None,
+                }
             };
 
             if let Some(curve_oid) = curve_oid {
-                let ec_alg_oid = ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
+                // Pick the signing algorithm once; both the key-pair
+                // constructor and the resulting struct share it.
+                let (signing_algorithm, is_p256) = if curve_oid == OID_P256 {
+                    (&ECDSA_P256_SHA256_ASN1_SIGNING, true)
+                } else if curve_oid == OID_P384 {
+                    (&ECDSA_P384_SHA384_ASN1_SIGNING, false)
+                } else {
+                    return Err(CryptoError::InvalidPrivateKey);
+                };
+
+                // Wrap the SEC1 key into a PKCS#8 PrivateKeyInfo so
+                // aws-lc-rs can parse it with its standard path.
                 let curve_params_der = curve_oid
                     .to_der()
                     .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
@@ -126,47 +146,31 @@ impl KeyProvider for AwsLcKeyProvider {
                     .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
 
                 let algorithm = spki::AlgorithmIdentifierRef {
-                    oid: ec_alg_oid,
+                    oid: OID_EC_PUBLIC_KEY,
                     parameters: Some(curve_params_any),
                 };
-
                 let pkcs8 = pkcs8::PrivateKeyInfo {
                     algorithm,
                     private_key: key_der,
                     public_key: None,
                 };
-
                 let pkcs8_der = pkcs8
                     .to_der()
                     .map_err(|_| CryptoError::OperationFailed(CryptoOperation::EncodeKey))?;
 
-                let p256_curve = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
-                if curve_oid == p256_curve {
-                    if let Ok(key_pair) =
-                        EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &pkcs8_der)
-                    {
-                        return Ok(Box::new(EcdsaSigningKey {
-                            key_pair,
-                            signing_algorithm: &ECDSA_P256_SHA256_ASN1_SIGNING,
-                        }));
-                    }
-                }
-
-                let p384_curve = ObjectIdentifier::new_unwrap("1.3.132.0.34");
-                if curve_oid == p384_curve {
-                    if let Ok(key_pair) =
-                        EcdsaKeyPair::from_pkcs8(&ECDSA_P384_SHA384_ASN1_SIGNING, &pkcs8_der)
-                    {
-                        return Ok(Box::new(EcdsaSigningKey {
-                            key_pair,
-                            signing_algorithm: &ECDSA_P384_SHA384_ASN1_SIGNING,
-                        }));
-                    }
+                if let Ok(key_pair) = EcdsaKeyPair::from_pkcs8(signing_algorithm, &pkcs8_der) {
+                    let key = if is_p256 {
+                        EcdsaSigningKey::new_p256(key_pair)
+                    } else {
+                        EcdsaSigningKey::new_p384(key_pair)
+                    };
+                    return Ok(Box::new(key));
                 }
             }
         }
 
-        // Check if it's a PEM encoded key
+        // Try PEM encoded key (PEM wraps either PKCS#8 or SEC1; the PKCS#8
+        // Document parser handles both since aws-lc-rs re-parses the body).
         if let Ok(pem_str) = str::from_utf8(key_der) {
             if pem_str.contains("-----BEGIN") {
                 if let Ok((_label, doc)) = pkcs8::Document::from_pem(pem_str) {
@@ -200,9 +204,6 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
             X509Certificate::from_der(cert_der).map_err(|_| CryptoError::CertificateParseFailed)?;
         let spki = &cert.tbs_certificate.subject_public_key_info;
 
-        const OID_EC_PUBLIC_KEY: ObjectIdentifier =
-            ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
-
         if spki.algorithm.oid != OID_EC_PUBLIC_KEY {
             return Err(CryptoError::UnsupportedPublicKeyAlgorithm);
         }
@@ -225,10 +226,6 @@ impl SignatureVerifier for AwsLcSignatureVerifier {
             OID_P384 => NamedGroup::Secp384r1,
             _ => return Err(CryptoError::UnsupportedEcCurve),
         };
-
-        if sig_alg != SignatureAlgorithm::ECDSA {
-            return Err(CryptoError::UnsupportedSignatureAlgorithm(sig_alg));
-        }
 
         let algorithm: &EcdsaVerificationAlgorithm = match (group, hash_alg) {
             (NamedGroup::Secp256r1, HashAlgorithm::SHA256) => &ECDSA_P256_SHA256_ASN1,
