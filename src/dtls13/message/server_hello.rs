@@ -14,6 +14,16 @@ const HRR_RANDOM: [u8; 32] = [
     0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
     0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
 ];
+/// Maximum number of extensions a ServerHello can carry.
+///
+/// Budget: `supported_versions` (required), `key_share` (required — either
+/// the server's share or an HRR group selection), `connection_id` (optional),
+/// `cookie` (HRR only), plus one spare.
+///
+/// Kept in sync with `MAX_CH_EXTENSIONS` in `client_hello.rs` and
+/// `MAX_EE_EXTENSIONS` in `encrypted_extensions.rs` — the three per-message
+/// capacities the handshake parser relies on.
+const MAX_SH_EXTENSIONS: usize = 5;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ServerHello {
@@ -22,7 +32,7 @@ pub struct ServerHello {
     pub legacy_session_id: SessionId,
     pub cipher_suite: Dtls13CipherSuite,
     pub legacy_compression_method: CompressionMethod,
-    pub extensions: Option<ArrayVec<Extension, 5>>,
+    pub extensions: Option<ArrayVec<Extension, MAX_SH_EXTENSIONS>>,
     // Receive-side values; outbound serialization uses the raw extensions above.
     parsed_extensions: ParsedExtensions,
 }
@@ -42,7 +52,7 @@ impl ServerHello {
         legacy_session_id: SessionId,
         cipher_suite: Dtls13CipherSuite,
         legacy_compression_method: CompressionMethod,
-        extensions: Option<ArrayVec<Extension, 5>>,
+        extensions: Option<ArrayVec<Extension, MAX_SH_EXTENSIONS>>,
     ) -> Self {
         ServerHello {
             legacy_version,
@@ -88,7 +98,7 @@ impl ServerHello {
                     input_ext.as_ptr() as usize - original_input.as_ptr() as usize;
                 let ext_base_offset = base_offset + consumed_to_ext_data;
 
-                let mut extensions_vec: ArrayVec<Extension, 5> = ArrayVec::new();
+                let mut extensions_vec: ArrayVec<Extension, MAX_SH_EXTENSIONS> = ArrayVec::new();
                 let mut current_input = input_ext;
                 let mut current_offset = ext_base_offset;
                 while !current_input.is_empty() {
