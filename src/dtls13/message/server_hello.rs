@@ -355,4 +355,12 @@ mod test {
         parsed.serialize(&body, &mut serialized);
         assert_eq!(&*serialized, &body[..]);
     }
+    #[test]
+    fn server_hello_capacity_documents_extension_budget() {
+        assert!(
+            MAX_SH_EXTENSIONS < ExtensionType::supported().len(),
+            "must stay below total supported count, otherwise \
+             `too_many_distinct_supported_extensions_are_rejected` stops failing"
+        );
+    }
 }
