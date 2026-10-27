@@ -272,7 +272,7 @@ impl Record {
             let l_flag = flags & 0b0000_0100 != 0;
             let seq_len: usize = if s_flag { 2 } else { 1 };
             let len_len: usize = if l_flag { 2 } else { 0 };
-            let header_len = 1 + seq_len + len_len;
+            let header_len = 1 + cid_len + seq_len + len_len;
 
             if buffer.len() >= header_len + 16 {
                 // unwrap: bounds checked above

@@ -133,6 +133,14 @@ pub(crate) enum LocalEvent {
 impl Client {
     pub(crate) fn new_with_engine(mut engine: Engine, now: Instant) -> Client {
         engine.set_client(true);
+        // Install our local CID from config up-front. The receive path consults
+        // `local_connection_id()` while parsing ciphertext records; without this,
+        // any server flight that carries a CID is silently discarded *before*
+        // `enable_peer_encryption` can re-parse it after ServerHello.
+        if let Some(cid) = engine.config().connection_id() {
+            let cid = cid.to_vec();
+            engine.set_local_cid(Some(&cid));
+        }
         let extension_data = engine.pop_buffer();
         let defragment_buffer = engine.pop_buffer();
 

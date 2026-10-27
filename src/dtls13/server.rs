@@ -416,6 +416,43 @@ impl State {
             unreachable!()
         };
 
+        // ----------------------------------------------------------------
+        // Early CID setup.
+        //
+        // The receive path consults `local_connection_id()` while parsing
+        // ciphertext records. If we don't install our own CID before the
+        // peer's epoch-2 flight arrives, `Records::parse_records` will hit
+        // the C-bit on the first protected record and silently discard the
+        // entire remaining flight (see `Dtls13Record::parse` and
+        // `Record::parse_buffer`).
+        //
+        // For the server this must happen on the *first* ClientHello, before
+        // any HelloRetryRequest, so the value is in place once the client
+        // starts sending protected records after ServerHello.
+        // ----------------------------------------------------------------
+        let peer_cid_bytes: Option<Vec<u8>> = client_hello
+            .connection_id()
+            .map(|c| c.cid(&server.defragment_buffer).to_vec());
+        let local_cid_bytes: Option<Vec<u8>> =
+            server.engine.config().connection_id().map(|c| c.to_vec());
+        if let (Some(peer_cid), Some(local_cid)) =
+            (peer_cid_bytes.as_deref(), local_cid_bytes.as_deref())
+        {
+            debug_assert!(
+                peer_cid.len() <= crate::dtls13::message::MAX_CID_LEN,
+                "peer CID exceeds MAX_CID_LEN"
+            );
+            debug_assert!(
+                local_cid.len() <= crate::dtls13::message::MAX_CID_LEN,
+                "local CID exceeds MAX_CID_LEN"
+            );
+            server.engine.set_peer_cid(Some(peer_cid));
+            server.engine.set_local_cid(Some(local_cid));
+        }
+
+        // ----------------------------------------------------------------
+        // Unconditional ClientHello validation.
+        // ----------------------------------------------------------------
         if !client_hello.legacy_cookie.is_empty() {
             return Err(Error::SecurityError(
                 crate::SecurityError::InvalidLegacyCookieInClientHello,
@@ -440,20 +477,13 @@ impl State {
             .into());
         }
 
-        let supported_versions_ok = client_hello
-            .supported_versions()
-            .is_some_and(|sv| sv.versions.contains(&ProtocolVersion::DTLS1_3));
-        let key_shares = client_hello
-            .key_share()
-            .map(|ks| ks.entries.as_slice())
-            .unwrap_or(&[]);
-        let client_groups = client_hello
-            .supported_groups()
-            .map(|groups| groups.as_slice())
-            .unwrap_or(&[]);
-        let client_srtp_profiles = client_hello.srtp_profiles();
-
-        // SNI: parse and record for the application to inspect.
+        // ----------------------------------------------------------------
+        // Parse negotiated parameters (SNI / RSL / ALPN / SRTP profiles).
+        //
+        // Done before the supported_versions / cookie checks so that in
+        // auto-sense mode `Dtls12Fallback` still reports a CH that would
+        // otherwise be structurally valid.
+        // ----------------------------------------------------------------
         if let Some(sni) = client_hello.server_name() {
             if let Some(host) = sni.host_name(&server.defragment_buffer) {
                 let host = host.to_vec();
@@ -461,12 +491,12 @@ impl State {
             }
         }
 
-        // RFC 8449: peer's Record Size Limit bounds our outgoing record size.
+        // RFC 8449: the peer's limit bounds our *outgoing* record size.
         if let Some(rsl) = client_hello.record_size_limit() {
             server.engine.set_peer_record_size_limit(Some(rsl.limit));
         }
 
-        // RFC 7301: negotiate ALPN — server preference order, first match wins.
+        // RFC 7301: server-preference order, first match wins.
         if let Some(client_alpn) = client_hello.alpn() {
             let server_protocols = server.engine.config().alpn_protocols();
             let matched = server_protocols.iter().find(|sp| {
@@ -482,6 +512,7 @@ impl State {
                     server.engine.set_negotiated_alpn(Some(&proto));
                 }
                 None => {
+                    // RFC 7301 §3.2: "no_application_protocol" is fatal.
                     return Err(
                         Error::SecurityError(crate::SecurityError::NoCommonAlpnProtocol).into(),
                     );
@@ -489,16 +520,11 @@ impl State {
             }
         }
 
-        // RFC 9146: enable CID only if BOTH sides configured one.
-        let peer_cid_opt = client_hello
-            .connection_id()
-            .map(|c| c.cid(&server.defragment_buffer).to_vec());
-        let local_cid_opt = server.engine.config().connection_id().map(|c| c.to_vec());
-        if let (Some(peer_cid), Some(local_cid)) = (peer_cid_opt, local_cid_opt) {
-            server.engine.set_peer_cid(Some(&peer_cid));
-            server.engine.set_local_cid(Some(&local_cid));
-        }
+        let client_srtp_profiles = client_hello.srtp_profiles();
 
+        // ----------------------------------------------------------------
+        // Cookie extension body (validated below, once we know it's needed).
+        // ----------------------------------------------------------------
         let mut client_cookie_data: Option<ArrayVec<u8, 32>> = None;
         for ext in &client_hello.extensions {
             if ext.extension_type == ExtensionType::Cookie {
@@ -511,6 +537,12 @@ impl State {
             }
         }
 
+        // ----------------------------------------------------------------
+        // DTLS 1.3 support check (auto-sense fallback happens here).
+        // ----------------------------------------------------------------
+        let supported_versions_ok = client_hello
+            .supported_versions()
+            .is_some_and(|sv| sv.versions.contains(&ProtocolVersion::DTLS1_3));
         if !supported_versions_ok {
             if server.auto_mode {
                 return Err((Error::Dtls12Fallback).into());
@@ -521,6 +553,9 @@ impl State {
             .into());
         }
 
+        // ----------------------------------------------------------------
+        // Cipher suite selection.
+        // ----------------------------------------------------------------
         let selected_cipher_suite = client_hello
             .cipher_suites
             .iter()
@@ -533,7 +568,18 @@ impl State {
         let client_random = client_hello.random;
         server.client_session_id = Some(client_hello.legacy_session_id);
 
+        // ----------------------------------------------------------------
+        // HelloRetryRequest (cookie and/or key_share).
+        // ----------------------------------------------------------------
         let need_cookie = server.engine.config().use_server_cookie();
+        let key_shares = client_hello
+            .key_share()
+            .map(|ks| ks.entries.as_slice())
+            .unwrap_or(&[]);
+        let client_groups = client_hello
+            .supported_groups()
+            .map(|groups| groups.as_slice())
+            .unwrap_or(&[]);
 
         let our_groups: ArrayVec<NamedGroup, 4> = server
             .engine
@@ -541,10 +587,10 @@ impl State {
             .kx_groups()
             .map(|g| g.name())
             .collect();
+
         let has_matching_key_share = key_shares
             .iter()
             .any(|entry| our_groups.contains(&entry.group));
-
         let hrr_group = if !has_matching_key_share {
             our_groups
                 .iter()
@@ -572,6 +618,11 @@ impl State {
                 debug!("Cookie validated successfully");
             } else {
                 if server.hello_retry {
+                    // Stale retransmission of the pre-HRR ClientHello. Roll back
+                    // the transcript that `next_handshake` just appended and
+                    // silently discard. The HRR flight will be retransmitted by
+                    // the normal flight-timeout mechanism if the client hasn't
+                    // responded.
                     debug!("Discarding stale ClientHello retransmission after HRR");
                     server.engine.transcript.resize(transcript_len_before, 0);
                     return Ok(Self::AwaitClientHello);
@@ -579,6 +630,8 @@ impl State {
 
                 debug!("No cookie in ClientHello; sending HelloRetryRequest");
                 server.engine.set_cipher_suite(selected_cipher_suite);
+                // Replace transcript BEFORE sending HRR so only CH1 is hashed
+                // (RFC 8446 §4.4.1).
                 let transcript_len = server.engine.transcript.len();
                 server
                     .engine
@@ -593,10 +646,11 @@ impl State {
                 server.engine.advance_peer_handshake_seq();
                 server.engine.reset_for_hello_retry();
                 server.hello_retry = true;
-
                 return Ok(Self::AwaitClientHello);
             }
         } else if let Some(ref cookie_bytes) = client_cookie_data {
+            // Cookie validated even when not strictly required, so a tampered
+            // cookie is still rejected.
             let expected_cookie = compute_cookie(
                 &server.cookie_secret,
                 &client_random,
@@ -611,6 +665,9 @@ impl State {
             }
         }
 
+        // ----------------------------------------------------------------
+        // Key exchange group selection.
+        // ----------------------------------------------------------------
         let matching_entry = key_shares
             .iter()
             .find(|entry| our_groups.contains(&entry.group));
@@ -618,51 +675,52 @@ impl State {
         let (selected_group, peer_key_range) = if let Some(entry) = matching_entry {
             (entry.group, entry.key_exchange_range.clone())
         } else {
+            // No matching key_share, but a common supported group exists → HRR
+            // requesting that group's key share.
             let common_group = our_groups
                 .iter()
                 .find(|g| client_groups.contains(g))
                 .copied();
 
-            return if let Some(group) = common_group {
-                if server.hello_retry {
-                    return Err(Error::SecurityError(
-                        crate::SecurityError::CannotSendSecondHelloRetryRequest,
-                    )
-                    .into());
-                }
-
-                debug!(
-                    "No matching key_share; sending HelloRetryRequest for group {:?}",
-                    group
+            let Some(group) = common_group else {
+                return Err(
+                    Error::SecurityError(crate::SecurityError::NoCommonKeyExchangeGroup).into(),
                 );
-
-                server.engine.set_cipher_suite(selected_cipher_suite);
-                let transcript_len = server.engine.transcript.len();
-                server
-                    .engine
-                    .replace_transcript_with_message_hash(transcript_len);
-                let cookie_for_hrr = compute_cookie(
-                    &server.cookie_secret,
-                    &client_random,
-                    server.engine.config().crypto_provider().hmac_provider,
-                );
-                send_hello_retry_request(
-                    server,
-                    selected_cipher_suite,
-                    &cookie_for_hrr,
-                    Some(group),
-                )?;
-
-                server.engine.advance_peer_handshake_seq();
-                server.engine.reset_for_hello_retry();
-                server.hello_retry = true;
-
-                Ok(Self::AwaitClientHello)
-            } else {
-                Err(Error::SecurityError(crate::SecurityError::NoCommonKeyExchangeGroup).into())
             };
+
+            if server.hello_retry {
+                return Err(Error::SecurityError(
+                    crate::SecurityError::CannotSendSecondHelloRetryRequest,
+                )
+                .into());
+            }
+
+            debug!(
+                "No matching key_share; sending HelloRetryRequest for group {:?}",
+                group
+            );
+
+            server.engine.set_cipher_suite(selected_cipher_suite);
+            let transcript_len = server.engine.transcript.len();
+            server
+                .engine
+                .replace_transcript_with_message_hash(transcript_len);
+            let cookie_for_hrr = compute_cookie(
+                &server.cookie_secret,
+                &client_random,
+                server.engine.config().crypto_provider().hmac_provider,
+            );
+            send_hello_retry_request(server, selected_cipher_suite, &cookie_for_hrr, Some(group))?;
+
+            server.engine.advance_peer_handshake_seq();
+            server.engine.reset_for_hello_retry();
+            server.hello_retry = true;
+            return Ok(Self::AwaitClientHello);
         };
 
+        // ----------------------------------------------------------------
+        // ECDHE.
+        // ----------------------------------------------------------------
         let kx_group = server
             .engine
             .find_kx_group(selected_group)
@@ -675,6 +733,10 @@ impl State {
             .start_exchange(kx_buf)
             .map_err(Error::CryptoError)?;
 
+        // The server's public key lives in `extension_data`; the metadata
+        // (group + pubkey range) is appended after it so `send_server_hello`
+        // can find it again. `extension_data` is reused as the scratch buffer
+        // because it lives through the state transition.
         server.extension_data.clear();
         let pub_key = key_exchange.pub_key();
         let pub_key_start = server.extension_data.len();
@@ -686,9 +748,11 @@ impl State {
         key_exchange
             .complete(peer_pub_key, &mut shared_secret)
             .map_err(Error::CryptoError)?;
-
         server.shared_secret = Some(shared_secret);
 
+        // ----------------------------------------------------------------
+        // SRTP profile (server preference order).
+        // ----------------------------------------------------------------
         if let Some(profiles) = client_srtp_profiles {
             for profile_id in profiles {
                 let profile: SrtpProfile = (*profile_id).into();
@@ -699,9 +763,11 @@ impl State {
             }
         }
 
+        // ----------------------------------------------------------------
+        // Persist selected cipher suite and metadata for `send_server_hello`.
+        // ----------------------------------------------------------------
         server.active_key_exchange = None;
         server.engine.set_cipher_suite(selected_cipher_suite);
-
         server
             .extension_data
             .extend_from_slice(&selected_group.as_u16().to_be_bytes());
@@ -711,8 +777,6 @@ impl State {
         server
             .extension_data
             .extend_from_slice(&(pub_key_end as u32).to_be_bytes());
-
-        drop(handshake);
 
         server.engine.advance_peer_handshake_seq();
 
