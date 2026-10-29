@@ -5,69 +5,72 @@
 [![docs.rs](https://img.shields.io/docsrs/dimpl13?label=docs.rs)](https://docs.rs/dimpl13)
 [![MSRV](https://img.shields.io/badge/MSRV-1.88.0-blue)](https://blog.rust-lang.org/)
 
-**dimpl13** is a separate fork of [dimpl](https://github.com/algesten/dimpl) aimed at
+0-RTT is planned for version 0.11.
+
+**dimpl13** is a separate fork of [dimpl](https://github.com/algesten/dimpl), aimed at
 building a sufficiently performant and convenient middleware for **DTLS 1.3**
 over UDP/RTC. It is a Sans-IO state machine that you embed into your
-event loop: you feed it incoming datagrams, poll for outgoing records and
-timers, and handle certificate validation and SRTP key export
-yourself.
+event loop: feed it incoming datagrams, poll outgoing records and
+timers, and plug in certificate validation and SRTP key export yourself.
 
-The crate follows the upstream dimpl development path and mirrors its design,
-module structure, and most of the public API. Differences:
+The crate aims to become a general-purpose DTLS 1.3 library, which diverges from the path of
+upstream dimpl, but still follows its design, module structure, and most of its
+public API. Differences:
 
-- **DTLS 1.3 only.** There is no support for DTLS 1.0 or DTLS 1.2 in this fork.
-  No code, no API, no documentation about 1.2 remains here.
-- **DTLS 1.3 extensions.** ALPN ([RFC 7301]), SNI ([RFC 6066]),
-  Connection ID ([RFC 9146]), and Record Size Limit ([RFC 8449]) are
-  supported. All are configured through `Config::builder()` and, where they
-  have an observable result, read through `Dtls::negotiated_alpn()` /
-  `Dtls::peer_server_name()`. See
-  [Supported DTLS 1.3 extensions](#supported-dtls-13-extensions).
-- **Focus on performance.** A number of abstractions unnecessary for 1.3 have been removed
-  (PSK, PRF-TLS-1.2, auto-sense), allocations on the hot path have been reduced
-  (`ParsedRecord` no longer carries an inline buffer of handshake fragments for every
-  app-data packet), and transient paths for queue-full errors have been added.
-- **Minor interface changes.** Some signatures differ from
-  upstream where justified by the goal of "convenient middleware" —
+- **DTLS 1.3 only.** This fork has no support for DTLS 1.0 or DTLS 1.2.
+  No code, API, or documentation about 1.2 remains here.
+- **DTLS 1.3 extensions.** Added ALPN ([RFC 7301]), SNI ([RFC 6066]),
+  Connection ID ([RFC 9146]), and Record Size Limit ([RFC 8449]). All of them are
+  configured via `Config::builder()` and (where applicable) read via
+  `Dtls::negotiated_alpn()` / `Dtls::peer_server_name()`. See the
+  [Supported DTLS 1.3 extensions](#supported-dtls-13-extensions) section for details.
+- **Performance focus.** Removed a number of abstractions not needed for 1.3
+  (PSK, PRF-TLS-1.2, auto-sense), reduced allocations on the hot path
+  (`ParsedRecord` no longer carries an inline buffer of handshake fragments
+  for every app-data packet), and added transient paths for queue-full errors.
+- **Minor interface changes.** Some signatures differ from upstream where
+  justified by the "convenient middleware" goal —
   for example, `Dtls::send_application_data` returns `Ok(0)` when the
-  transmit queue is full, so the caller can retry without data loss.
+  transmit queue is full, so that the caller can retry without losing data.
 
 If you need DTLS 1.2 or auto-sense (version detection from the first
 ClientHello) — use the original [dimpl](https://github.com/algesten/dimpl).
 
 ## Async wrapper for Tokio
 
-If you want an async wrapper over Tokio instead of working directly with the
-Sans-IO engine, use the **[`tokio-dtls`](https://crates.io/crates/tokio-dtls)**
-crate. It wraps `dimpl13` in a familiar `async` API (`connect` / `accept`,
-`send` / `recv`, `close`), owns the `UdpSocket` and a background task
-internally, and forwards negotiation results (ALPN, SNI) outward through
+If you want an async wrapper over Tokio instead of working with the
+Sans-IO engine directly, use the
+**[`tokio-dtls`](https://crates.io/crates/tokio-dtls)** crate. It wraps
+`dimpl13` in a familiar `async` API (`connect` / `accept`, `send` / `recv`,
+`close`), holds the `UdpSocket` and a background task inside, and exposes
+negotiation results (ALPN, SNI) via
 `DtlsConnection::negotiated_alpn()` / `DtlsConnection::peer_server_name()`.
 The cryptography and state machine are the same as in `dimpl13`; only the
-usage model changes. Pick `tokio-dtls` when you don't want to write your own
-event loop; pick `dimpl13` when you need full control over the engine.
+usage model changes. Choose `tokio-dtls` if you don't want to write your own
+event loop; choose `dimpl13` if you want full control over the engine.
 
 ## Goals
-- **DTLS 1.3**: implements the handshake and record layer to the extent necessary
-  for WebRTC and typical UDP protocols.
+- **DTLS 1.3**: protocol and extension implementation to a degree
+  sufficient for using the crate beyond the WebRTC scenario
+  implied by dimpl.
 - **Safety**: `forbid(unsafe_code)` throughout the crate.
 - **Minimal Rust-only deps**: only small, well-maintained
   Rust crates for cryptography.
 - **Low overhead**: tight control over allocations and buffers;
   Sans-IO integration.
 - **Predictable retries**: queue overflow on the hot path does not
-  kill the connection — the application receives a "retry later" signal.
+  drop the connection — the application gets a "retry later" signal.
 
 ### Non-goals
 - **DTLS 1.0 / DTLS 1.2** (use [dimpl](https://github.com/algesten/dimpl) for DTLS 1.2)
-- **Async**: the crate is Sans-IO and is not tied to a specific event loop
-  (for Tokio, see [tokio-dtls](https://crates.io/crates/tokio-dtls)).
-- **no_std** (probably not in principle)
+- **Async**: the crate is Sans-IO and not tied to a specific event loop
+  (for Tokio see [tokio-dtls](https://crates.io/crates/tokio-dtls)).
+- **no_std** (probably never)
 - **RSA**
 - **DHE**
-- **PSK** — in DTLS 1.3 the PSK path was never implemented in upstream dimpl;
-  the fork preserves this state.
-- **Version auto-sense** — makes no sense when 1.3 is the only version.
+- **PSK** — the PSK path was never implemented in upstream dimpl for DTLS 1.3;
+  the fork preserves that state.
+- **Version auto-sense** — doesn't make sense when 1.3 is the only version.
 
 ## Cryptography surface
 - **Cipher suites (TLS 1.3 over DTLS)**
@@ -78,12 +81,12 @@ event loop; pick `dimpl13` when you need full control over the engine.
 - **Key exchange**: ECDHE (P-256 / P-384), X25519.
 - **Signatures**: ECDSA P-256/SHA-256, ECDSA P-384/SHA-384.
 - **DTLS-SRTP**: exports keying material for
-  `SRTP_AEAD_AES_256_GCM`, `SRTP_AEAD_AES_128_GCM` and
+  `SRTP_AEAD_AES_256_GCM`, `SRTP_AEAD_AES_128_GCM`, and
   `SRTP_AES128_CM_SHA1_80` ([RFC 5764], [RFC 7714]).
 
 ## Supported DTLS 1.3 extensions
 
-Four extensions are configured through `dimpl13::Config::builder()` and
+Four extensions are configured via `dimpl13::Config::builder()` and
 (where applicable) observed through the engine's public API:
 
 | Extension | Direction | How to configure | How to read |
@@ -95,24 +98,24 @@ Four extensions are configured through `dimpl13::Config::builder()` and
 
 Details:
 
-- **ALPN.** The client sends a list of protocols; the server picks one from
-  its own preference list. Both sides then read the selected protocol through
-  `negotiated_alpn()`. If there is no intersection, the server aborts with
-  `Error::SecurityError(NoCommonAlpnProtocol)` — the correct RFC 7301
-  behavior.
-- **SNI.** The client sends a server name; the server can read it through
-  `peer_server_name()`. On the client the method always returns `None`.
-  `dimpl13` does **not** check that the SNI matches the peer's certificate —
+- **ALPN.** The client sends a list of protocols; the server chooses one from
+  its preference list. Both sides receive the selected protocol
+  via `negotiated_alpn()`. If there is no intersection, the server aborts
+  the handshake with `Error::SecurityError(NoCommonAlpnProtocol)` —
+  this is the correct behavior per RFC 7301.
+- **SNI.** The client sends the server name; the server can read it
+  via `peer_server_name()`. On the client, the method always returns `None`.
+  `dimpl13` does **not** verify that SNI matches the peer's certificate —
   that is application policy.
-- **Connection ID.** Requires configuring **both** sides; otherwise the
-  extension is silently disabled and the wire format falls back to the
-  standard record header. Transparent to `send_application_data` /
-  `Output::ApplicationData`. This is the mechanism that keeps a session
-  alive across NAT rebinding.
-- **Record Size Limit.** Each side advertises a maximum outgoing record
-  size; the peer's limit is applied to our outgoing records. Default is
-  `16385` (`Config::default()`). Asymmetric: it is enough for one side to
-  set it. Useful for constrained networks or path-MTU-limited tunnels.
+- **Connection ID.** Must be configured on **both** sides; otherwise
+  the extension is silently disabled and the wire format reverts to the standard
+  record header. Transparent for `send_application_data` /
+  `Output::ApplicationData`. This is the mechanism that preserves the session across
+  NAT rebinding.
+- **Record Size Limit.** Each side announces the maximum size of
+  outgoing records; the peer's limit applies to our outgoing records.
+  Default is `16385` (`Config::default()`). Asymmetric: it suffices
+  for one side to set a value. Useful for constrained networks.
 
 ```rust,no_run
 use std::sync::Arc;
@@ -141,56 +144,56 @@ if let Some(proto) = dtls.negotiated_alpn() {
 // if let Some(sni) = dtls.peer_server_name() { … }
 ```
 
-If you don't need any of these extensions, `Config::default()` gives you
-bare DTLS 1.3 — no ALPN, no SNI, no Connection ID, and the default Record
-Size Limit. This is the cheapest mode.
+If the extensions are not needed, `Config::default()` gives a bare DTLS 1.3 without
+ALPN, without SNI, without Connection ID, and with the default Record Size Limit —
+this is the cheapest mode.
 
 ### Certificate model
-During the handshake the engine emits [`Output::PeerCert`][peer_cert] with the peer's
-leaf certificate (DER). The crate uses the certificate to verify the signature of
-DTLS handshake messages but does not perform PKI validation.
-The application validates the certificate according to its own policy (fingerprint,
-chain building, name/EKU checks, pinning, etc.).
+During the handshake, the engine emits [`Output::PeerCert`][peer_cert] with
+the peer's leaf certificate (DER). The crate uses the certificate to verify
+the signature of DTLS handshake messages, but does not perform PKI validation.
+The application itself validates the certificate according to its own policy
+(fingerprint, chain building, name/EKU checks, pinning, etc.).
 
 ### Sans-IO integration model
 Using the engine takes three calls:
-- [`Dtls::handle_packet`][handle_packet] — feed a complete received
+- [`Dtls::handle_packet`][handle_packet] — feed a whole received
   UDP datagram.
 - [`Dtls::poll_output`][poll_output] — pull outgoing
   DTLS records, timers, events.
 - [`Dtls::handle_timeout`][handle_timeout] — advance
   retransmissions / time-based progress.
 
-`Output` is an enum with borrowed references into the buffer you gave
-to `poll_output`:
+`Output` is an enum with references into the buffer you gave to
+`poll_output`:
 - `Packet(&[u8])` — send to the UDP socket.
-- `BufferTooSmall { needed }` — enlarge the buffer and retry.
+- `BufferTooSmall { needed }` — increase the buffer and retry.
 - `Timeout(Instant)` — schedule a timer, call
-  `handle_timeout` at this (or a later) moment.
-- `Connected` — handshake completed.
+  `handle_timeout` at that (or later) moment.
+- `Connected` — handshake complete.
 - `PeerCert(&[u8])` — peer's leaf certificate (DER) for validation.
 - `KeyingMaterial(KeyingMaterial, SrtpProfile)` — DTLS-SRTP export.
 - `ApplicationData(&[u8])` — plaintext from the peer.
-- `CloseNotify` — the peer sent `close_notify` (graceful shutdown).
+- `CloseNotify` — peer sent `close_notify` (graceful shutdown).
 
 ## Error handling
 
 Every `Error` returned by the public API
 ([`handle_packet`][handle_packet], [`handle_timeout`][handle_timeout],
 `send_application_data`, `close`) is **fatal** for the connection: the engine
-has no recoverable states, and the correct reaction is to drop
+has no recoverable states, so the correct response is to drop
 `Dtls` and, if the connection is still needed, start a new handshake.
 
 Transient conditions inherent to an unreliable transport — corrupted
-datagrams, retransmissions, out-of-window records, parser noise, **receive
-queue overflow** — are handled internally and do not surface as `Error`.
-Such packets are silently dropped (`debug!` log), and the connection
-stays alive. An `Error` never needs to be interpreted as
+datagrams, duplicates, out-of-window records, parser noise, **receive queue
+overflow** — are handled internally and never surface as an `Error`.
+Such packets are silently dropped (logged at `debug!`), and the connection
+keeps going. An `Error` should never be interpreted as
 "retry" — it always means "give up and tear down the connection".
 
 **The exception is transmit queue overflow on the application data hot path.**
 [`Dtls::send_application_data`][send_app] returns
-`Ok(0)` if the queue is full; the data is **not** accepted and must be
+`Ok(0)` if the queue is full; the data was **not** accepted and must be
 resent after [`poll_output`][poll_output]. This is not a connection error,
 it is backpressure. See also `Config::builder().max_queue_tx(...)`.
 
@@ -259,8 +262,8 @@ let _ = example_event_loop(dtls);
 
 ## Backpressure and queue sizes
 
-`Config::builder()` allows you to increase queue sizes if your
-scenario (e.g. KCP-over-DTLS) generates bursts:
+`Config::builder()` lets you increase queue sizes if your
+scenario (e.g., KCP-over-DTLS) generates bursts:
 
 ```rust,no_run
 # use std::sync::Arc;
@@ -275,26 +278,16 @@ let config = Arc::new(
 ```
 
 The default values (`max_queue_rx = 30`, `max_queue_tx = 10`)
-are designed for WebRTC and keep per-connection memory minimal. With
-`256 / 256` the upper bound is ~576 KB per connection (2 × 256 × 1150 B),
-and that much is actually used only when the queues are fully loaded.
-
-## Versioning and divergence from upstream
-
-- The crate **deliberately** does not track `dimpl` one-to-one. Major
-  public API changes relative to upstream are documented in
-  [`CHANGELOG.md`].
-- All changes not related to removing 1.2, adding extensions
-  (ALPN/SNI/CID/RSL), or to optimizations are kept in the upstream style
-  where possible, to ease merging of cryptographic bug fixes.
-- If you want upstream-compatible behavior, use
-  [dimpl][upstream].
+are tuned for WebRTC and keep per-connection memory minimal. At
+`256 / 256`, the upper bound is ~576 KB per connection (2 × 256 × 1150 B),
+and that amount is only actually used when the queues are fully loaded.
 
 #### MSRV
 Rust 1.88.0
 
 #### Status
-- Session resumption is not implemented (WebRTC performs a full handshake on ICE restart).
+- Session resumption is not implemented (WebRTC does a full handshake on ICE restart,
+  which is why dimpl did not have this capability).
 - Renegotiation is not applicable in DTLS 1.3; use `KeyUpdate`.
 
 [upstream]: https://github.com/algesten/dimpl
@@ -314,15 +307,13 @@ Rust 1.88.0
 
 License: MIT OR Apache-2.0
 
-CHANGELOG.md is not filled in and is inherited from upstream.
-Contributions are highly welcome, but please,
-when adding functionality, put it behind cargo features.
+Contributions are extremely welcome.
 I don't think too much about contribution requirements, so
-you can contribute to dimpl13 freely, without being
-limited by strict rules. Use Russian or English,
-but exclusively English in code and commits, put significant
-features behind cargo features, use cargo fmt. Documentation in Russian
-is not a requirement. Use issues, PRs — as you prefer, I will
-maintain dimpl13 since I use DTLS 1.3 in production.
-AI usage is not prohibited and does not require labeling, although I
-may still not review garbage contributions.
+you can contribute to dimpl13 freely and
+without being constrained by strict rules. Use Russian or English,
+but English only in code and commits, put significant
+additions to the library behind cargo features, and use cargo fmt.
+Documentation in Russian is not a requirement. Use issues, PRs —
+as you prefer; I will maintain dimpl13 since I use DTLS 1.3
+in production. Use of AI is not forbidden and does not require labeling, although I
+may still disregard garbage contributions.
